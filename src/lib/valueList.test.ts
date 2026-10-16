@@ -1,16 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { CodeDescription } from "./terminology";
 import {
   buildValueListModel,
   childAqlPath,
   extractRecordedCode,
   extractValueSetUrl,
+  loadExternalState,
+  resolvePanelState,
   findTemplateNodeByAqlPath,
   normaliseBindings,
   pickLanguage,
   stripNamePredicates,
   templateLanguages,
   visibleOptions,
+  type CodedValueSelection,
   type RecordedCode,
+  type ValueListModel,
   type ValueListOption,
 } from "./valueList";
 
@@ -355,5 +360,179 @@ describe("visibleOptions", () => {
     expect(v.rows).toHaveLength(200);
     expect(v.rows.some((r) => r.code === "450")).toBe(true);
     expect(v.hiddenCount).toBe(300);
+  });
+});
+
+const smokingSelection: CodedValueSelection = {
+  aqlPath: ELEMENT_PATH,
+  treePath: "/content[0]/data/events[0]/data/items[0]",
+  elementName: "Smoking status",
+  recorded: {
+    rmType: "DV_CODED_TEXT",
+    terminology: "A06_smoking",
+    code: "2",
+    label: "Former smoker",
+    ordinal: null,
+  },
+};
+
+const snomedNode = {
+  id: "overall_status",
+  name: "Smoking status",
+  rmType: "DV_CODED_TEXT",
+  aqlPath: ELEMENT_PATH,
+  inputs: [{ suffix: "code", type: "CODED_TEXT", terminology: "SNOMED-CT" }],
+};
+
+describe("resolvePanelState", () => {
+  it("reports a missing template", () => {
+    expect(resolvePanelState(null, smokingSelection, "en")).toEqual({
+      kind: "unavailable",
+      reason: "The template for this composition could not be loaded.",
+    });
+  });
+
+  it("reports an unmatched field", () => {
+    expect(resolvePanelState(template([]), smokingSelection, "en")).toEqual({
+      kind: "unavailable",
+      reason: "This value's field was not found in the template.",
+    });
+  });
+
+  it("reports an ambiguous field", () => {
+    const tpl = template([
+      { ...smokingNode, id: "a", name: "A", localizedNames: undefined },
+      { ...smokingNode, id: "b", name: "B", localizedNames: undefined },
+    ]);
+    expect(resolvePanelState(tpl, smokingSelection, "en")).toEqual({
+      kind: "unavailable",
+      reason: "This value matches 2 fields in the template that can't be told apart.",
+    });
+  });
+
+  it("returns the template list when the field has one", () => {
+    const state = resolvePanelState(template([smokingNode]), smokingSelection, "sl");
+    expect(state).toMatchObject({ kind: "list", source: "template" });
+    expect(state.kind === "list" && state.model.options.map((o) => o.label)).toEqual([
+      "Nekadilec",
+      "Former smoker",
+    ]);
+  });
+
+  it("asks for an external lookup when the field has no list", () => {
+    expect(resolvePanelState(template([snomedNode]), smokingSelection, "en")).toMatchObject({
+      kind: "needs-external",
+      model: { terminology: "SNOMED-CT", options: [] },
+    });
+  });
+});
+
+const externalModel: ValueListModel = buildValueListModel(snomedNode, "en");
+const recSnomed: RecordedCode = {
+  rmType: "DV_CODED_TEXT",
+  terminology: "SNOMED-CT",
+  code: "8517006",
+  label: "Ex-smoker",
+  ordinal: null,
+};
+const descEx: CodeDescription = {
+  system: "http://snomed.info/sct",
+  code: "8517006",
+  display: "Ex-smoker",
+  designations: ["Former smoker"],
+  properties: [],
+};
+
+describe("loadExternalState", () => {
+  it("expands the value set and lists its concepts", async () => {
+    const deps = {
+      expandValueSet: async () => ({
+        total: 2,
+        concepts: [
+          { system: "http://snomed.info/sct", code: "8517006", display: "Ex-smoker" },
+          { system: "http://snomed.info/sct", code: "77176002", display: "Smoker" },
+        ],
+      }),
+      describeCode: vi.fn(),
+    };
+    const s = await loadExternalState(
+      "srv",
+      { ...externalModel, valueSetUrl: "http://vs" },
+      recSnomed,
+      deps,
+    );
+    expect(s).toMatchObject({ kind: "list", source: "terminology-server" });
+    expect(s.kind === "list" && s.model.options.map((o) => o.code)).toEqual([
+      "8517006",
+      "77176002",
+    ]);
+    expect(deps.describeCode).not.toHaveBeenCalled();
+  });
+
+  it("without a value set, describes the recorded code and explains why", async () => {
+    const deps = { expandValueSet: vi.fn(), describeCode: async () => descEx };
+    expect(
+      await loadExternalState("srv", { ...externalModel, valueSetUrl: null }, recSnomed, deps),
+    ).toEqual({
+      kind: "external-unavailable",
+      model: { ...externalModel, valueSetUrl: null },
+      reason: "The template doesn't name a value set for this field.",
+      description: descEx,
+    });
+    expect(deps.expandValueSet).not.toHaveBeenCalled();
+  });
+
+  it("on expansion failure, falls back to describe and includes the error", async () => {
+    const deps = {
+      expandValueSet: async () => {
+        throw "HTTP 404: unknown ValueSet";
+      },
+      describeCode: async () => descEx,
+    };
+    expect(
+      await loadExternalState(
+        "srv",
+        { ...externalModel, valueSetUrl: "http://vs" },
+        recSnomed,
+        deps,
+      ),
+    ).toMatchObject({
+      kind: "external-unavailable",
+      reason: "The terminology server couldn't expand the value set: HTTP 404: unknown ValueSet",
+      description: descEx,
+    });
+  });
+
+  it("with no terminology server, still resolves with description null", async () => {
+    const deps = {
+      expandValueSet: async () => {
+        throw "No terminology server configured";
+      },
+      describeCode: async () => {
+        throw "No terminology server configured";
+      },
+    };
+    expect(
+      await loadExternalState(
+        "srv",
+        { ...externalModel, valueSetUrl: "http://vs" },
+        recSnomed,
+        deps,
+      ),
+    ).toMatchObject({ kind: "external-unavailable", description: null });
+  });
+
+  it("without a server id, resolves without calling the terminology server", async () => {
+    const deps = { expandValueSet: vi.fn(), describeCode: vi.fn() };
+    expect(
+      await loadExternalState(
+        null,
+        { ...externalModel, valueSetUrl: "http://vs" },
+        recSnomed,
+        deps,
+      ),
+    ).toMatchObject({ kind: "external-unavailable", description: null });
+    expect(deps.expandValueSet).not.toHaveBeenCalled();
+    expect(deps.describeCode).not.toHaveBeenCalled();
   });
 });

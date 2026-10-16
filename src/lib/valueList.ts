@@ -5,6 +5,13 @@
  * these return, so all of the matching/fallback behaviour is unit-tested here.
  */
 
+import {
+  describeCode,
+  expandValueSet,
+  type CodeDescription,
+  type ValueSetExpansion,
+} from "./terminology";
+
 type TemplateNode = Record<string, unknown>;
 
 /** The code actually recorded in the composition for a clicked value. */
@@ -299,4 +306,113 @@ export function visibleOptions(
       ? options.slice(0, cap)
       : [...options.slice(0, cap - 1), options[recordedIndex]];
   return { rows, hiddenCount: options.length - rows.length, recordedNotInList };
+}
+
+/** What the value list panel shows. Reason strings are user-facing. */
+export type PanelState =
+  | { kind: "loading" }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "list"; model: ValueListModel; source: "template" | "terminology-server" }
+  | {
+      kind: "external-unavailable";
+      model: ValueListModel;
+      reason: string;
+      description: CodeDescription | null;
+    };
+
+export interface ExternalDeps {
+  expandValueSet: (
+    serverId: string,
+    valueSet: string,
+    filter?: string,
+    count?: number,
+  ) => Promise<ValueSetExpansion>;
+  describeCode: (serverId: string, system: string, code: string) => Promise<CodeDescription>;
+}
+
+/** Most concepts requested from `ValueSet/$expand`; the panel renders at most 200 of them. */
+const EXPANSION_COUNT = 1000;
+
+/**
+ * The synchronous part of opening the panel: everything the Web Template can
+ * answer. Fields without a list come back as `needs-external` for
+ * `loadExternalState` to fill in from the terminology server.
+ */
+export function resolvePanelState(
+  webTemplate: Record<string, unknown> | null,
+  selection: CodedValueSelection,
+  language: string | null,
+): PanelState | { kind: "needs-external"; model: ValueListModel } {
+  if (!webTemplate) {
+    return {
+      kind: "unavailable",
+      reason: "The template for this composition could not be loaded.",
+    };
+  }
+  const match = findTemplateNodeByAqlPath(webTemplate, selection.aqlPath, selection.elementName);
+  if (match.status === "not-found") {
+    return { kind: "unavailable", reason: "This value's field was not found in the template." };
+  }
+  if (match.status === "ambiguous") {
+    return {
+      kind: "unavailable",
+      reason: `This value matches ${match.count} fields in the template that can't be told apart.`,
+    };
+  }
+  const model = buildValueListModel(match.node, language);
+  if (model.options.length > 0) return { kind: "list", model, source: "template" };
+  return { kind: "needs-external", model };
+}
+
+/**
+ * Fills in an external-terminology field from the terminology server: the
+ * expanded value set if the template names one, else a description of the
+ * recorded code plus why the list is missing. Never rejects.
+ */
+export async function loadExternalState(
+  serverId: string | null,
+  model: ValueListModel,
+  recorded: RecordedCode,
+  deps: ExternalDeps = { expandValueSet, describeCode },
+): Promise<PanelState> {
+  if (!serverId) {
+    return {
+      kind: "external-unavailable",
+      model,
+      reason: "No server is selected, so the terminology server can't be asked.",
+      description: null,
+    };
+  }
+
+  let reason = "The template doesn't name a value set for this field.";
+  if (model.valueSetUrl) {
+    try {
+      const expansion = await deps.expandValueSet(
+        serverId,
+        model.valueSetUrl,
+        undefined,
+        EXPANSION_COUNT,
+      );
+      const options: ValueListOption[] = expansion.concepts
+        .filter((c) => c.code)
+        .map((c) => ({
+          code: c.code as string,
+          label: c.display,
+          description: null,
+          ordinal: null,
+          bindings: [],
+        }));
+      return { kind: "list", model: { ...model, options }, source: "terminology-server" };
+    } catch (e) {
+      reason = `The terminology server couldn't expand the value set: ${String(e)}`;
+    }
+  }
+
+  let description: CodeDescription | null = null;
+  try {
+    description = await deps.describeCode(serverId, recorded.terminology, recorded.code);
+  } catch {
+    description = null;
+  }
+  return { kind: "external-unavailable", model, reason, description };
 }
