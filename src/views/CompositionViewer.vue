@@ -25,6 +25,9 @@ const compositionUid = computed(() => route.params.compositionUid as string);
 
 const composition = ref<Record<string, unknown> | null>(null);
 const flatComposition = ref<Record<string, unknown> | null>(null);
+// Why the FLAT fetch failed, if it did — shown on the disabled FLAT tab and in
+// the paths panel instead of an unexplained empty list.
+const flatError = ref<string | null>(null);
 const webTemplate = ref<Record<string, unknown> | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -86,8 +89,10 @@ watch(
           ehrId: ehrId.value,
           compositionUid: uid,
         });
-      } catch {
+        flatError.value = null;
+      } catch (e) {
         flatComposition.value = null;
+        flatError.value = String(e);
       }
 
       // Try to fetch web template for pretty view
@@ -303,6 +308,7 @@ onUnmounted(() => {
             :class="{ active: activeTab === 'flat' }"
             @click="activeTab = 'flat'"
             :disabled="!flatComposition"
+            :title="flatError ? `FLAT format unavailable: ${flatError}` : undefined"
           >
             FLAT
           </button>
@@ -451,6 +457,7 @@ onUnmounted(() => {
       <FlatPathPanel
         v-if="showFlatPaths"
         :paths="flatPaths"
+        :error="flatError"
         @highlight="highlightedPath = $event"
       />
     </div>

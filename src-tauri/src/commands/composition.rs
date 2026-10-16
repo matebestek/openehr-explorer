@@ -100,6 +100,27 @@ pub async fn get_composition_flat(
     )
     .await?;
 
+    // Better Platform's openEHR endpoint doesn't serve the FLAT media type and
+    // answers 406. It exposes FLAT through its own API at
+    // `{base_url}/rest/v1/composition/{uid}?format=FLAT` (same pattern as
+    // `get_web_template`'s Web Template fallback).
+    let resp = if resp.status == 406 {
+        let url = format!(
+            "{}/rest/v1/composition/{}?format=FLAT",
+            profile.base_url.trim_end_matches('/'),
+            urlencoding::encode(&composition_uid)
+        );
+        send_instrumented(
+            &app,
+            &client,
+            make_request(&client, reqwest::Method::GET, &url, &profile.auth_method)
+                .header("Accept", "application/json"),
+        )
+        .await?
+    } else {
+        resp
+    };
+
     if !resp.is_success {
         return Err(format!(
             "Server returned HTTP {}: {}",
@@ -107,7 +128,25 @@ pub async fn get_composition_flat(
         ));
     }
 
-    serde_json::from_str(&resp.body).map_err(|e| format!("Failed to parse FLAT composition: {}", e))
+    let body: Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse FLAT composition: {}", e))?;
+    Ok(unwrap_flat_composition(body))
+}
+
+/// Better's `/rest/v1/composition/{uid}?format=FLAT` wraps the FLAT map as
+/// `{ "meta": {...}, "format": "FLAT", "templateId": ..., "composition": {...} }`;
+/// the openEHR endpoint returns it bare. Every FLAT path contains a `/`, so an
+/// object whose keys have none is an envelope, not a FLAT map.
+fn unwrap_flat_composition(body: Value) -> Value {
+    match body {
+        Value::Object(mut map)
+            if map.get("composition").is_some_and(Value::is_object)
+                && !map.keys().any(|k| k.contains('/')) =>
+        {
+            map.remove("composition").unwrap_or_default()
+        }
+        other => other,
+    }
 }
 
 #[tauri::command]
@@ -460,4 +499,32 @@ pub async fn delete_composition(
         "Composition {} deleted successfully",
         composition_uid
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unwrap_flat_composition_better_envelope() {
+        let body = serde_json::json!({
+            "meta": { "href": "https://cdr.example.com/rest/v1/composition/abc::cdr::1" },
+            "format": "FLAT",
+            "templateId": "T",
+            "composition": { "t/context/start_time": "2026-01-01T00:00:00Z" }
+        });
+        assert_eq!(
+            unwrap_flat_composition(body),
+            serde_json::json!({ "t/context/start_time": "2026-01-01T00:00:00Z" })
+        );
+    }
+
+    #[test]
+    fn test_unwrap_flat_composition_bare_is_unchanged() {
+        // A bare FLAT map is returned as-is, even if one of its keys happens
+        // to be "composition" — its other keys are FLAT paths, so it can't be
+        // Better's envelope.
+        let body = serde_json::json!({ "composition": { "x": 1 }, "t/language|code": "en" });
+        assert_eq!(unwrap_flat_composition(body.clone()), body);
+    }
 }

@@ -4,6 +4,8 @@ import CopyButton from "./CopyButton.vue";
 
 const props = defineProps<{
   paths: string[];
+  // Why the FLAT composition couldn't be loaded, if it couldn't.
+  error?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -43,7 +45,8 @@ const filteredPaths = computed(() => {
       </div>
 
       <div v-if="filteredPaths.length === 0" class="empty-state">
-        <p>No paths available.</p>
+        <p v-if="error && paths.length === 0">FLAT format unavailable: {{ error }}</p>
+        <p v-else>No paths available.</p>
       </div>
     </div>
   </div>
@@ -106,5 +109,10 @@ const filteredPaths = computed(() => {
   color: var(--color-text-secondary);
   word-break: break-all;
   flex: 1;
+}
+
+/* The FLAT error can carry a long server response body or URL. */
+.empty-state p {
+  overflow-wrap: anywhere;
 }
 </style>
