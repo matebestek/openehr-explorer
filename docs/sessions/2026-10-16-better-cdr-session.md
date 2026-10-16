@@ -72,7 +72,7 @@ Clicking a coded value in the Pretty view opens a right-side panel showing the f
 
 **Not run locally:** `npm run test:a11y`, because the Playwright browser download hung. CI runs it.
 
-## 8. Where `A06_smoking`'s codes actually live (uncommitted)
+## 8. Where `A06_smoking`'s codes actually live (commits `90410b9`, `5d1bc1d`)
 
 The user found that the panel showed only the recorded code. Investigation:
 
@@ -87,7 +87,7 @@ The user found that the panel showed only the recorded code. Investigation:
    - `A06_smoking` = 1 Never smoked / Nikoli ni kadila (A06.1), 2 Former smoker / Bivša kadilka (A06.2), 3 Current smoker / Kadilka (A06.3)
    - Unknown paths under the host return the portal SPA (200 HTML), so probing addresses by status code tells you nothing.
 
-**Implemented (uncommitted, all checks green):**
+**Implemented (all checks green):**
 - **Server profile:** new optional `code_list_url`, in Rust and TypeScript and in the server form.
 - **Backend:** command `get_code_list(server_id, code_system, language)` in `src-tauri/src/commands/code_list.rs`. It fetches the entities and the code system's languages, never sends CDR credentials, and has 6 unit tests.
 - **Lookup order** for a field the template doesn't list: `usesCodeListService(terminology)` is true unless the id is a FHIR terminology name, a URI, `local` or `openehr`. When true, `loadExternalState` lists the codes from the code-list service, with user codes and the code system's own languages; the language switch re-fetches. Otherwise the FHIR path is used, as before.
@@ -104,7 +104,7 @@ The user found that the panel showed only the recorded code. Investigation:
 - frontend: 193 vitest tests, vue-tsc, oxlint, oxfmt
 - Storybook builds, with new `CodeListService` and `RecordedCodeDetail` stories
 
-## 9. Local code systems in the Terminology page (uncommitted)
+## 9. Local code systems in the Terminology page (commits `2ef166a`, `46b1492`)
 
 The user asked for the code-list service's code systems (270 on this server) in the Terminology page's system dropdown.
 
@@ -123,10 +123,27 @@ The user asked for the code-list service's code systems (270 on this server) in 
 - frontend: 197 vitest tests, vue-tsc, oxlint, oxfmt
 - Storybook builds, with 2 new picker stories
 
+## Commit history on `feat/template-fetch-fix`
+
+| Commit | What |
+|---|---|
+| `ddf5731` | Web Template 406 → Better `/rest/v1/template` fallback |
+| `c73577e` | EHR list sorting + timeout fallback |
+| `5d310db` | FLAT 406 → Better `/rest/v1/composition?format=FLAT` fallback, visible FLAT errors |
+| `9c70a3e` | No FHIR `$lookup` for local code systems |
+| `12206bb`…`dbac4e9` | PRD-0019 value list panel (plan, 5 tasks, review fixes), merged from `feat/value-list-panel` |
+| `90410b9` | Code-list service: `code_list_url`, `get_code_list`, badge → full list / value → recorded code, Source section |
+| `5d1bc1d` | PRD-0019 amendment + this session log |
+| `2ef166a` | Local code systems in the Terminology page |
+| `46b1492` | Session log §9 |
+
+The user pushes between steps; after the last commit, the branch was 2 commits ahead of `origin`.
+
 ## Open items
 
-- The code-list listing is confirmed working in the app; the new Source section isn't tested in the app yet.
-- Confirm the FLAT fallback against the real server.
-- Commit the code-list work; decide whether to keep the internal hostname in PRD-0019's amendment, since the repo is public.
-- Push `feat/template-fetch-fix` and open a PR.
-- The deferred minors from §7.
+- **Not yet tried in the app:** the code-list listing in the value panel is confirmed working, but the Source section and the Terminology page changes (§9) haven't been tried yet.
+- **FLAT fallback:** confirm it against the real server.
+- **Public repo:** PRD-0019's amendment and this log contain the internal hostname `zzora-test.ss.ezdrav.si`, and the repo is public. The earlier commits look already pushed. Decide whether to replace it with a placeholder in a follow-up commit.
+- **PR:** open a PR for `feat/template-fetch-fix`.
+- **Deferred minors from §7.**
+- **Local `test:a11y`:** never ran, because the Playwright browser download hung; CI covers it.
