@@ -27,6 +27,17 @@ export interface WhatsNewEntry {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.11.0",
+    date: "2026-10-16",
+    highlights: [
+      {
+        title: "See a coded value in its full value list",
+        description:
+          "In the composition viewer, click a coded value to open a side panel listing every option the template allows, in every language it carries, with the recorded one highlighted. Fields bound to SNOMED CT or other external terminologies are expanded via your terminology server.",
+      },
+    ],
+  },
+  {
     version: "0.10.0",
     date: "2026-10-09",
     highlights: [

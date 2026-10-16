@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { resolveNodeLabel } from "../lib/webtemplate";
+import { childAqlPath, extractRecordedCode, type CodedValueSelection } from "../lib/valueList";
 import CaretIcon from "./CaretIcon.vue";
 
 interface Props {
@@ -10,6 +11,8 @@ interface Props {
   searchQuery?: string;
   depth?: number;
   serverId?: string | null;
+  // CompositionTree path of the value whose value list is open (PRD-0019).
+  selectedTreePath?: string | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -17,7 +20,15 @@ const props = withDefaults(defineProps<Props>(), {
   searchQuery: "",
   depth: 0,
   serverId: null,
+  selectedTreePath: null,
 });
+
+const emit = defineEmits<{
+  "select-coded-value": [selection: CodedValueSelection];
+}>();
+
+const onSelectCodedValue = (selection: CodedValueSelection) =>
+  emit("select-coded-value", selection);
 
 interface TreeNode {
   key: string;
@@ -32,6 +43,8 @@ interface TreeNode {
     code: string;
   } | null;
   terminologyBadge?: string | null;
+  // Set on DV_CODED_TEXT / DV_ORDINAL values: clicking opens the value list.
+  selection?: CodedValueSelection | null;
 }
 
 interface FilteredTreeNode extends TreeNode {
@@ -39,15 +52,28 @@ interface FilteredTreeNode extends TreeNode {
   isAncestor: boolean;
 }
 
-function buildTree(data: unknown, parentPath: string = "", key: string = "root"): TreeNode[] {
+// `parentAqlPath`/`attribute` build the AQL-style path (`/content[...]/data[at0001]/...`)
+// used to find a value's field in the Web Template; `parentName` is the
+// enclosing object's name, i.e. the ELEMENT's name for a DV_* value.
+function buildTree(
+  data: unknown,
+  parentPath: string = "",
+  key: string = "root",
+  parentAqlPath: string = "",
+  attribute: string | null = null,
+  parentName: string | null = null,
+): TreeNode[] {
   if (data === null || data === undefined) return [];
 
   if (Array.isArray(data)) {
-    return data.flatMap((item, i) => buildTree(item, `${parentPath}[${i}]`, `${key}[${i}]`));
+    return data.flatMap((item, i) =>
+      buildTree(item, `${parentPath}[${i}]`, `${key}[${i}]`, parentAqlPath, attribute, parentName),
+    );
   }
 
   if (typeof data === "object") {
     const obj = data as Record<string, unknown>;
+    const aqlPath = attribute ? childAqlPath(parentAqlPath, attribute, obj) : parentAqlPath;
     const name = (obj.name as any)?.value ?? (obj.name as string) ?? key;
     const archetypeId =
       (obj.archetype_node_id as string) ??
@@ -69,13 +95,13 @@ function buildTree(data: unknown, parentPath: string = "", key: string = "root")
       if (v !== null && typeof v === "object" && !Array.isArray(v)) {
         const childObj = v as Record<string, unknown>;
         if (childObj._type || childObj.archetype_node_id) {
-          children.push(...buildTree(v, `${parentPath}/${k}`, k));
+          children.push(...buildTree(v, `${parentPath}/${k}`, k, aqlPath, k, String(name)));
           continue;
         }
       }
 
       if (Array.isArray(v) && v.length > 0 && typeof v[0] === "object") {
-        children.push(...buildTree(v, `${parentPath}/${k}`, k));
+        children.push(...buildTree(v, `${parentPath}/${k}`, k, aqlPath, k, String(name)));
         continue;
       }
 
@@ -106,6 +132,13 @@ function buildTree(data: unknown, parentPath: string = "", key: string = "root")
       }
     }
 
+    // A DV_ORDINAL's `symbol` is itself a DV_CODED_TEXT; the ordinal row is
+    // the clickable one, so its symbol child isn't.
+    const recorded = attribute === "symbol" ? null : extractRecordedCode(obj);
+    const selection: CodedValueSelection | null = recorded
+      ? { aqlPath, treePath: parentPath || "/", elementName: parentName, recorded }
+      : null;
+
     return [
       {
         key,
@@ -117,6 +150,7 @@ function buildTree(data: unknown, parentPath: string = "", key: string = "root")
         path: parentPath || "/",
         codedValue,
         terminologyBadge,
+        selection,
       },
     ];
   }
@@ -211,6 +245,8 @@ const filteredTree = computed(() => {
         :highlighted-path="highlightedPath"
         :search-query="searchQuery"
         :server-id="serverId"
+        :selected-tree-path="selectedTreePath"
+        :on-select-coded-value="onSelectCodedValue"
       />
     </div>
   </div>
@@ -219,6 +255,7 @@ const filteredTree = computed(() => {
 <script lang="ts">
 import { defineComponent, h, ref as vueRef, type PropType, type VNode } from "vue";
 import { lookupCode as lookupCodeFn } from "../lib/terminology";
+import type { CodedValueSelection as Selection } from "../lib/valueList";
 
 interface TreeNodeType {
   key: string;
@@ -235,6 +272,7 @@ interface TreeNodeType {
     code: string;
   } | null;
   terminologyBadge?: string | null;
+  selection?: Selection | null;
 }
 
 const INTERNAL_TERMINOLOGIES = new Set(["openehr", "local"]);
@@ -247,6 +285,11 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
     highlightedPath: { type: String, default: null },
     searchQuery: { type: String, default: "" },
     serverId: { type: String, default: null },
+    selectedTreePath: { type: String, default: null },
+    onSelectCodedValue: {
+      type: Function as PropType<(selection: Selection) => void>,
+      default: null,
+    },
   },
   setup(props): () => VNode {
     const collapsed = vueRef(props.depth > 3);
@@ -341,19 +384,43 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
 
       if (node.value !== null && node.value !== undefined) {
         // Show resolved terminology term if available
-        if (node.codedValue && resolvedTerm.value) {
+        const valueContent =
+          node.codedValue && resolvedTerm.value
+            ? [
+                resolvedTerm.value,
+                h(
+                  "span",
+                  { class: "coded-ref" },
+                  ` [${node.codedValue.terminology} ${node.codedValue.code}]`,
+                ),
+              ]
+            : String(node.value);
+        const valueClass = [
+          "node-value",
+          { "resolved-term": !!(node.codedValue && resolvedTerm.value) },
+        ];
+        const selection = node.selection;
+        if (selection && props.onSelectCodedValue) {
+          // Coded values open their value list (PRD-0019).
           headerChildren.push(
-            h("span", { class: "node-value resolved-term" }, [
-              resolvedTerm.value,
-              h(
-                "span",
-                { class: "coded-ref" },
-                ` [${node.codedValue.terminology} ${node.codedValue.code}]`,
-              ),
-            ]),
+            h(
+              "button",
+              {
+                type: "button",
+                class: [
+                  ...valueClass,
+                  "coded-value-button",
+                  { selected: props.selectedTreePath === node.path },
+                ],
+                title: "Show the full value list",
+                "aria-pressed": props.selectedTreePath === node.path,
+                onClick: () => props.onSelectCodedValue?.(selection),
+              },
+              valueContent,
+            ),
           );
         } else {
-          headerChildren.push(h("span", { class: "node-value" }, String(node.value)));
+          headerChildren.push(h("span", { class: valueClass }, valueContent));
         }
       }
 
@@ -387,6 +454,8 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
               highlightedPath: props.highlightedPath,
               searchQuery: props.searchQuery,
               serverId: props.serverId,
+              selectedTreePath: props.selectedTreePath,
+              onSelectCodedValue: props.onSelectCodedValue,
             }),
           ),
         );
@@ -478,6 +547,24 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
   color: var(--color-primary);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+:deep(.coded-value-button) {
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+:deep(.coded-value-button:hover) {
+  text-decoration: underline;
+}
+:deep(.coded-value-button:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+:deep(.coded-value-button.selected) {
+  background: var(--color-bg-tertiary);
 }
 
 :deep(.resolved-term) {

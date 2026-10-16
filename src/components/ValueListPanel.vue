@@ -7,6 +7,7 @@ import {
   type TermBindingRef,
 } from "../lib/valueList";
 
+// Escape-to-close is handled by CompositionViewer's window key handler.
 // Side panel showing a clicked coded value within its full value list
 // (PRD-0019). Presentational only: CompositionViewer resolves `state` via
 // src/lib/valueList.ts and owns selection/language.
@@ -65,7 +66,7 @@ watch(
 </script>
 
 <template>
-  <aside class="value-list-panel" aria-label="Value list" @keydown.esc="emit('close')">
+  <aside class="value-list-panel" aria-label="Value list">
     <div class="panel-header">
       <h3>{{ title }}</h3>
       <button

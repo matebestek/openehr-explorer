@@ -7,12 +7,21 @@ import { useCompositionStore } from "../stores/composition";
 import { useAnalytics } from "../composables/useAnalytics";
 import CompositionTree from "../components/CompositionTree.vue";
 import FlatPathPanel from "../components/FlatPathPanel.vue";
+import ValueListPanel from "../components/ValueListPanel.vue";
 import SearchOverlay from "../components/SearchOverlay.vue";
 import TourReplayButton from "../components/TourReplayButton.vue";
 import JsonViewer from "../components/JsonViewer.vue";
 import CopyButton from "../components/CopyButton.vue";
 import EditButton from "../components/EditButton.vue";
 import DeleteButton from "../components/DeleteButton.vue";
+import {
+  loadExternalState,
+  pickLanguage,
+  resolvePanelState,
+  templateLanguages,
+  type CodedValueSelection,
+  type PanelState,
+} from "../lib/valueList";
 
 const route = useRoute();
 const router = useRouter();
@@ -32,7 +41,17 @@ const webTemplate = ref<Record<string, unknown> | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const activeTab = ref<"pretty" | "json" | "flat" | "versions">("pretty");
-const showFlatPaths = ref(false);
+// The right-hand side shows at most one panel: FLAT paths or a value list.
+const rightPanel = ref<"paths" | "values" | null>(null);
+const showFlatPaths = computed(() => rightPanel.value === "paths");
+
+// Value list panel (PRD-0019)
+const valueSelection = ref<CodedValueSelection | null>(null);
+const valuePanelState = ref<PanelState>({ kind: "loading" });
+const valuePanelLanguage = ref<string | null>(null);
+// Bumped per selection so a slow terminology-server answer for an earlier
+// click can't overwrite the panel for a later one.
+let valueRequestId = 0;
 const highlightedPath = ref<string | null>(null);
 const showDeleteDialog = ref(false);
 const deleting = ref(false);
@@ -130,6 +149,12 @@ function handleKeydown(e: KeyboardEvent) {
     currentMatchIndex.value = 0;
     nextTick(() => searchOverlayRef.value?.focus());
   }
+
+  // Escape closes the value list (PRD-0019) — unless the search overlay is
+  // open, which handles its own Escape first.
+  if (e.key === "Escape" && rightPanel.value === "values" && !showPanelSearch.value) {
+    closeValuePanel();
+  }
 }
 
 function closePanelSearch() {
@@ -148,6 +173,7 @@ watch(activeTab, (tab) => {
 
 watch(compositionUid, () => {
   closePanelSearch();
+  closeValuePanel();
   // Version history is scoped to the composition being viewed — drop any
   // stale data from the previous one so switching compositions doesn't
   // briefly show the wrong history.
@@ -239,6 +265,68 @@ watch(panelSearchQuery, () => {
   currentMatchIndex.value = 0;
 });
 
+const valuePanelLanguages = computed(() =>
+  webTemplate.value ? templateLanguages(webTemplate.value).languages : [],
+);
+
+const valuePanelTemplateId = computed(() => {
+  const id = (composition.value as any)?.archetype_details?.template_id?.value;
+  return typeof id === "string" ? id : null;
+});
+
+async function showValueList(selection: CodedValueSelection) {
+  const requestId = ++valueRequestId;
+  valueSelection.value = selection;
+  rightPanel.value = "values";
+  const { languages, defaultLanguage } = webTemplate.value
+    ? templateLanguages(webTemplate.value)
+    : { languages: [], defaultLanguage: null };
+  const compositionLanguage = (composition.value as any)?.language?.code_string;
+  valuePanelLanguage.value = pickLanguage(
+    typeof compositionLanguage === "string" ? compositionLanguage : null,
+    languages,
+    defaultLanguage,
+  );
+
+  const state = resolvePanelState(webTemplate.value, selection, valuePanelLanguage.value);
+  if (state.kind !== "needs-external") {
+    valuePanelState.value = state;
+    return;
+  }
+  valuePanelState.value = { kind: "loading" };
+  const external = await loadExternalState(
+    serverStore.activeServerId,
+    state.model,
+    selection.recorded,
+  );
+  if (requestId === valueRequestId) valuePanelState.value = external;
+}
+
+function changeValuePanelLanguage(language: string) {
+  valuePanelLanguage.value = language;
+  const selection = valueSelection.value;
+  // Only template-backed lists have translations; external lists stay as fetched.
+  if (!selection || valuePanelState.value.kind !== "list") return;
+  if (valuePanelState.value.source !== "template") return;
+  const state = resolvePanelState(webTemplate.value, selection, language);
+  if (state.kind !== "needs-external") valuePanelState.value = state;
+}
+
+function closeValuePanel() {
+  valueRequestId++;
+  valueSelection.value = null;
+  if (rightPanel.value === "values") rightPanel.value = null;
+}
+
+function toggleFlatPaths() {
+  if (rightPanel.value === "paths") {
+    rightPanel.value = null;
+  } else {
+    closeValuePanel();
+    rightPanel.value = "paths";
+  }
+}
+
 // Extract flat paths from the flat composition or web template
 const flatPaths = computed(() => {
   if (flatComposition.value && typeof flatComposition.value === "object") {
@@ -325,7 +413,7 @@ onUnmounted(() => {
           type="button"
           class="btn btn-sm"
           data-tour="composition-paths"
-          @click="showFlatPaths = !showFlatPaths"
+          @click="toggleFlatPaths"
         >
           {{ showFlatPaths ? "Hide" : "Show" }} Paths
         </button>
@@ -352,7 +440,7 @@ onUnmounted(() => {
       <div
         class="main-content"
         :class="{
-          'with-sidebar': showFlatPaths,
+          'with-sidebar': rightPanel !== null,
           'main-content--bounded': activeTab === 'json' || activeTab === 'flat',
         }"
       >
@@ -373,6 +461,8 @@ onUnmounted(() => {
             :highlighted-path="highlightedPath"
             :search-query="panelSearchQuery"
             :server-id="serverStore.activeServerId"
+            :selected-tree-path="valueSelection?.treePath ?? null"
+            @select-coded-value="showValueList"
           />
         </div>
 
@@ -454,6 +544,16 @@ onUnmounted(() => {
       </div>
 
       <!-- FLAT Path Panel -->
+      <ValueListPanel
+        v-if="rightPanel === 'values' && valueSelection"
+        :selection="valueSelection"
+        :state="valuePanelState"
+        :languages="valuePanelLanguages"
+        :language="valuePanelLanguage"
+        :template-id="valuePanelTemplateId"
+        @close="closeValuePanel"
+        @update:language="changeValuePanelLanguage"
+      />
       <FlatPathPanel
         v-if="showFlatPaths"
         :paths="flatPaths"

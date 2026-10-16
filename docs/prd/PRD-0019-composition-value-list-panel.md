@@ -2,7 +2,7 @@
 
 Version: 1.0
 Date: 2026-10-16
-Status: Approved
+Status: Implemented
 Owner: openEHR Explorer
 Repo slug: openehr-explorer
 Depends on: Web Template fetch (incl. Better Platform fallback in `get_web_template`), terminology server settings (`expand_valueset`, `describe_code`)
