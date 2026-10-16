@@ -130,3 +130,173 @@ export function findTemplateNodeByAqlPath(
   if (named.length === 1) return { status: "found", node: named[0] };
   return { status: "ambiguous", count: matches.length };
 }
+
+export interface TermBindingRef {
+  terminology: string;
+  code: string;
+}
+
+export interface ValueListOption {
+  code: string;
+  label: string | null;
+  description: string | null;
+  ordinal: number | null;
+  bindings: TermBindingRef[];
+}
+
+/** Everything the panel shows about a field, in one language. */
+export interface ValueListModel {
+  fieldName: string;
+  fieldDescription: string | null;
+  rmType: string;
+  terminology: string | null;
+  listOpen: boolean;
+  valueSetUrl: string | null;
+  options: ValueListOption[];
+  fieldBindings: TermBindingRef[];
+  annotations: Record<string, string>;
+}
+
+export interface VisibleOptions {
+  /** At most `cap` rows, always including the recorded option if it's in the list. */
+  rows: ValueListOption[];
+  hiddenCount: number;
+  /** The recorded code isn't in the list at all (open list or data drift). */
+  recordedNotInList: boolean;
+}
+
+export function templateLanguages(webTemplate: Record<string, unknown>): {
+  languages: string[];
+  defaultLanguage: string | null;
+} {
+  const languages = Array.isArray(webTemplate.languages)
+    ? webTemplate.languages.filter((l): l is string => typeof l === "string")
+    : [];
+  const defaultLanguage =
+    typeof webTemplate.defaultLanguage === "string" ? webTemplate.defaultLanguage : null;
+  return { languages, defaultLanguage };
+}
+
+/** Composition language if the template has it, else the template default, else its first language. */
+export function pickLanguage(
+  compositionLanguage: string | null,
+  languages: string[],
+  defaultLanguage: string | null,
+): string | null {
+  if (compositionLanguage && languages.includes(compositionLanguage)) return compositionLanguage;
+  return defaultLanguage ?? languages[0] ?? null;
+}
+
+/** `[SNOMED-CT(2003)::8517006]` → `{ terminology: "SNOMED-CT", code: "8517006" }`. */
+function parseBracketedCode(raw: string, fallbackTerminology: string): TermBindingRef | null {
+  const stripped = raw.trim().replace(/^\[/, "").replace(/\]$/, "");
+  const [terminologyPart, code] = stripped.includes("::")
+    ? stripped.split("::", 2)
+    : [fallbackTerminology, stripped];
+  const terminology = terminologyPart.split("(")[0];
+  return code ? { terminology, code } : null;
+}
+
+/**
+ * Term bindings as the Web Template carries them, keyed by terminology. Better
+ * and EHRBase shape the per-terminology value differently, so accept the known
+ * shapes and ignore anything else.
+ */
+export function normaliseBindings(raw: unknown): TermBindingRef[] {
+  const map = asRecord(raw);
+  if (!map) return [];
+  const out: TermBindingRef[] = [];
+  for (const [terminology, entry] of Object.entries(map)) {
+    if (typeof entry === "string") {
+      const parsed = parseBracketedCode(entry, terminology);
+      if (parsed) out.push(parsed);
+      continue;
+    }
+    const e = asRecord(entry);
+    const code = asRecord(e?.value)?.codeString ?? e?.codeString;
+    if (typeof code === "string" && code) out.push({ terminology, code });
+  }
+  return out;
+}
+
+function codeInput(node: TemplateNode): Record<string, unknown> | undefined {
+  const inputs = Array.isArray(node.inputs) ? node.inputs.map(asRecord) : [];
+  return inputs.find((i) => i && (i.suffix === "code" || i.suffix === undefined)) ?? undefined;
+}
+
+/** A FHIR ValueSet URL the template names for this field, if any. */
+export function extractValueSetUrl(node: TemplateNode): string | null {
+  const terminology = codeInput(node)?.terminology;
+  if (typeof terminology !== "string") return null;
+  if (terminology.startsWith("terminology:")) {
+    const match = /[?&]url=([^&]+)/.exec(terminology);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+  if (/^https?:\/\//.test(terminology) && terminology.includes("/ValueSet/")) return terminology;
+  return null;
+}
+
+function localized(map: unknown, language: string | null): string | null {
+  const m = asRecord(map);
+  const value = language && m ? m[language] : undefined;
+  return typeof value === "string" ? value : null;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+export function buildValueListModel(node: TemplateNode, language: string | null): ValueListModel {
+  const input = codeInput(node);
+  const list = Array.isArray(input?.list) ? input.list.map(asRecord) : [];
+
+  const options: ValueListOption[] = [];
+  for (const item of list) {
+    if (!item || typeof item.value !== "string") continue;
+    options.push({
+      code: item.value,
+      label: localized(item.localizedLabels, language) ?? str(item.label),
+      description: localized(item.localizedDescriptions, language),
+      ordinal: typeof item.ordinal === "number" ? item.ordinal : null,
+      bindings: normaliseBindings(item.termBindings),
+    });
+  }
+
+  const annotations: Record<string, string> = {};
+  for (const [key, value] of Object.entries(asRecord(node.annotations) ?? {})) {
+    if (typeof value === "string") annotations[key] = value;
+  }
+
+  return {
+    fieldName:
+      localized(node.localizedNames, language) ??
+      str(node.localizedName) ??
+      str(node.name) ??
+      str(node.id) ??
+      "",
+    fieldDescription: localized(node.localizedDescriptions, language),
+    rmType: str(node.rmType) ?? "",
+    terminology: str(input?.terminology),
+    listOpen: input?.listOpen === true,
+    valueSetUrl: extractValueSetUrl(node),
+    options,
+    fieldBindings: normaliseBindings(node.termBindings),
+    annotations,
+  };
+}
+
+export function visibleOptions(
+  options: ValueListOption[],
+  recorded: RecordedCode,
+  cap = 200,
+): VisibleOptions {
+  const recordedIndex = options.findIndex((o) => o.code === recorded.code);
+  const recordedNotInList = recordedIndex === -1;
+  if (options.length <= cap) return { rows: options, hiddenCount: 0, recordedNotInList };
+
+  const rows =
+    recordedIndex === -1 || recordedIndex < cap
+      ? options.slice(0, cap)
+      : [...options.slice(0, cap - 1), options[recordedIndex]];
+  return { rows, hiddenCount: options.length - rows.length, recordedNotInList };
+}

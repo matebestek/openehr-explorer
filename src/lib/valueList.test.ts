@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildValueListModel,
   childAqlPath,
   extractRecordedCode,
+  extractValueSetUrl,
   findTemplateNodeByAqlPath,
+  normaliseBindings,
+  pickLanguage,
   stripNamePredicates,
+  templateLanguages,
+  visibleOptions,
+  type RecordedCode,
+  type ValueListOption,
 } from "./valueList";
 
 const OBS = "openEHR-EHR-OBSERVATION.tobacco_smoking_summary.v1";
@@ -170,5 +178,182 @@ describe("findTemplateNodeByAqlPath", () => {
     expect(findTemplateNodeByAqlPath(tpl, ELEMENT_PATH, "Overall status")).toEqual({
       status: "not-found",
     });
+  });
+});
+
+describe("templateLanguages", () => {
+  it("reads languages and defaultLanguage from the Web Template root", () => {
+    expect(templateLanguages({ languages: ["en", "sl"], defaultLanguage: "sl" })).toEqual({
+      languages: ["en", "sl"],
+      defaultLanguage: "sl",
+    });
+    expect(templateLanguages({})).toEqual({ languages: [], defaultLanguage: null });
+  });
+});
+
+describe("pickLanguage", () => {
+  it("prefers the composition language when the template has it", () => {
+    expect(pickLanguage("sl", ["en", "sl"], "en")).toBe("sl");
+  });
+
+  it("falls back to the template default, then the first language", () => {
+    expect(pickLanguage("de", ["en", "sl"], "sl")).toBe("sl");
+    expect(pickLanguage(null, ["en", "sl"], null)).toBe("en");
+    expect(pickLanguage(null, [], null)).toBeNull();
+  });
+});
+
+describe("normaliseBindings", () => {
+  it("accepts { TERM: { value: { codeString } } }, { TERM: { codeString } } and '[TERM::code]' shapes", () => {
+    expect(normaliseBindings({ "SNOMED-CT": { value: { codeString: "8517006" } } })).toEqual([
+      { terminology: "SNOMED-CT", code: "8517006" },
+    ]);
+    expect(normaliseBindings({ LOINC: { codeString: "72166-2" } })).toEqual([
+      { terminology: "LOINC", code: "72166-2" },
+    ]);
+    expect(normaliseBindings({ "SNOMED-CT": "[SNOMED-CT(2003)::8517006]" })).toEqual([
+      { terminology: "SNOMED-CT", code: "8517006" },
+    ]);
+  });
+
+  it("returns [] for missing or unrecognised input", () => {
+    expect(normaliseBindings(undefined)).toEqual([]);
+    expect(normaliseBindings(42)).toEqual([]);
+  });
+});
+
+describe("extractValueSetUrl", () => {
+  it("reads url= from a terminology:// expand reference", () => {
+    expect(
+      extractValueSetUrl({
+        inputs: [
+          {
+            suffix: "code",
+            terminology:
+              "terminology://fhir.hl7.org/ValueSet/$expand?url=http://example.org/vs/smoking",
+          },
+        ],
+      }),
+    ).toBe("http://example.org/vs/smoking");
+  });
+
+  it("accepts a direct http(s) ValueSet URL", () => {
+    expect(
+      extractValueSetUrl({
+        inputs: [{ suffix: "code", terminology: "http://example.org/fhir/ValueSet/smoking" }],
+      }),
+    ).toBe("http://example.org/fhir/ValueSet/smoking");
+  });
+
+  it("returns null for plain terminology ids", () => {
+    expect(
+      extractValueSetUrl({ inputs: [{ suffix: "code", terminology: "SNOMED-CT" }] }),
+    ).toBeNull();
+  });
+});
+
+const smokingNode = {
+  id: "overall_status",
+  name: "Smoking status",
+  localizedNames: { en: "Smoking status", sl: "Status kajenja" },
+  localizedDescriptions: {
+    en: "Current or past tobacco use",
+    sl: "Trenutna ali pretekla raba tobaka",
+  },
+  rmType: "DV_CODED_TEXT",
+  aqlPath: ELEMENT_PATH,
+  termBindings: { "SNOMED-CT": { value: { codeString: "229819007" } } },
+  annotations: { comment: "Asked at every visit" },
+  inputs: [
+    {
+      suffix: "code",
+      type: "CODED_TEXT",
+      terminology: "A06_smoking",
+      list: [
+        {
+          value: "1",
+          label: "Never smoked",
+          localizedLabels: { en: "Never smoked", sl: "Nekadilec" },
+          localizedDescriptions: { en: "Never smoked", sl: "Nikoli kadil" },
+        },
+        {
+          value: "2",
+          label: "Former smoker",
+          localizedLabels: { en: "Former smoker" },
+          termBindings: { "SNOMED-CT": { value: { codeString: "8517006" } } },
+        },
+      ],
+    },
+  ],
+};
+
+const ordinalNode = {
+  id: "severity",
+  name: "Severity",
+  rmType: "DV_ORDINAL",
+  inputs: [
+    {
+      type: "CODED_TEXT",
+      list: [{ value: "at0012", label: "Severe", ordinal: 3 }],
+    },
+  ],
+};
+
+describe("buildValueListModel", () => {
+  it("uses the selected language for field and option text", () => {
+    const m = buildValueListModel(smokingNode, "sl");
+    expect(m.fieldName).toBe("Status kajenja");
+    expect(m.fieldDescription).toBe("Trenutna ali pretekla raba tobaka");
+    expect(m.terminology).toBe("A06_smoking");
+    expect(m.rmType).toBe("DV_CODED_TEXT");
+    expect(m.options[0]).toMatchObject({
+      code: "1",
+      label: "Nekadilec",
+      description: "Nikoli kadil",
+    });
+  });
+
+  it("falls back to the default label and a null description when a translation is missing", () => {
+    expect(buildValueListModel(smokingNode, "sl").options[1]).toMatchObject({
+      code: "2",
+      label: "Former smoker",
+      description: null,
+    });
+  });
+
+  it("carries option and field bindings and annotations", () => {
+    const m = buildValueListModel(smokingNode, "en");
+    expect(m.options[1].bindings).toEqual([{ terminology: "SNOMED-CT", code: "8517006" }]);
+    expect(m.fieldBindings).toEqual([{ terminology: "SNOMED-CT", code: "229819007" }]);
+    expect(m.annotations).toEqual({ comment: "Asked at every visit" });
+    expect(m.listOpen).toBe(false);
+    expect(m.valueSetUrl).toBeNull();
+  });
+
+  it("carries ordinals for DV_ORDINAL lists", () => {
+    expect(buildValueListModel(ordinalNode, "en").options[0].ordinal).toBe(3);
+  });
+});
+
+function opt(code: string): ValueListOption {
+  return { code, label: `Label ${code}`, description: null, ordinal: null, bindings: [] };
+}
+
+function rec(code: string): RecordedCode {
+  return { rmType: "DV_CODED_TEXT", terminology: "local", code, label: null, ordinal: null };
+}
+
+describe("visibleOptions", () => {
+  it("flags a recorded code that is not in the list", () => {
+    expect(visibleOptions([opt("1"), opt("3")], rec("2")).recordedNotInList).toBe(true);
+    expect(visibleOptions([opt("1"), opt("2")], rec("2")).recordedNotInList).toBe(false);
+  });
+
+  it("caps rows but always includes the recorded option", () => {
+    const many = Array.from({ length: 500 }, (_, i) => opt(String(i)));
+    const v = visibleOptions(many, rec("450"), 200);
+    expect(v.rows).toHaveLength(200);
+    expect(v.rows.some((r) => r.code === "450")).toBe(true);
+    expect(v.hiddenCount).toBe(300);
   });
 });
