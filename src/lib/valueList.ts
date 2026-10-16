@@ -8,7 +8,9 @@
 import {
   describeCode,
   expandValueSet,
+  getCodeList,
   type CodeDescription,
+  type CodeList,
   type ValueSetExpansion,
 } from "./terminology";
 
@@ -156,6 +158,8 @@ export interface ValueListOption {
   description: string | null;
   ordinal: number | null;
   bindings: TermBindingRef[];
+  /** Display code from a code-list service (e.g. `A06.2`), if it has one. */
+  userCode?: string | null;
 }
 
 /** Everything the panel shows about a field, in one language. */
@@ -329,7 +333,15 @@ export function visibleOptions(
 export type PanelState =
   | { kind: "loading" }
   | { kind: "unavailable"; reason: string }
-  | { kind: "list"; model: ValueListModel; source: "template" | "terminology-server" }
+  | {
+      kind: "list";
+      model: ValueListModel;
+      source: "template" | "terminology-server" | "code-list-service";
+      /** The list's own languages when they don't come from the template. */
+      languages?: string[];
+      /** Where a code-list service list was fetched from. */
+      sourceUrl?: string;
+    }
   | {
       kind: "external-unavailable";
       model: ValueListModel;
@@ -345,6 +357,43 @@ export interface ExternalDeps {
     count?: number,
   ) => Promise<ValueSetExpansion>;
   describeCode: (serverId: string, system: string, code: string) => Promise<CodeDescription>;
+  getCodeList?: (
+    serverId: string,
+    codeSystem: string,
+    language: string | null,
+  ) => Promise<CodeList>;
+}
+
+/** Terminologies the FHIR terminology server is asked about (cf. `terminology_to_fhir_system`). */
+const FHIR_TERMINOLOGIES = new Set([
+  "SNOMED-CT",
+  "SNOMED",
+  "SCT",
+  "LOINC",
+  "ICD-10",
+  "ICD10",
+  "ICD-11",
+  "ICD11",
+  "ATC",
+]);
+
+/**
+ * Whether a terminology id names a template-local code system (e.g. Better's
+ * `A06_smoking`) whose codes only a deployment's code-list service knows —
+ * not a standard terminology, a URI, or openEHR's own `local`/`openehr`.
+ */
+export function usesCodeListService(terminology: string): boolean {
+  if (FHIR_TERMINOLOGIES.has(terminology.toUpperCase())) return false;
+  if (terminology.includes("://") || terminology.startsWith("urn:")) return false;
+  return terminology !== "local" && terminology !== "openehr";
+}
+
+/** The list entry for the recorded code, if the list has it. */
+export function recordedOption(
+  options: ValueListOption[],
+  recorded: RecordedCode,
+): ValueListOption | null {
+  return options.find((o) => o.code === recorded.code) ?? null;
 }
 
 /** Most concepts requested from `ValueSet/$expand`; the panel renders at most 200 of them. */
@@ -395,7 +444,8 @@ export async function loadExternalState(
   serverId: string | null,
   model: ValueListModel,
   recorded: RecordedCode,
-  deps: ExternalDeps = { expandValueSet, describeCode },
+  deps: ExternalDeps = { expandValueSet, describeCode, getCodeList },
+  language: string | null = null,
 ): Promise<PanelState> {
   if (!serverId) {
     return {
@@ -404,6 +454,34 @@ export async function loadExternalState(
       reason: "No server is selected, so the terminology server can't be asked.",
       description: null,
     };
+  }
+
+  if (usesCodeListService(recorded.terminology) && deps.getCodeList) {
+    try {
+      const list = await deps.getCodeList(serverId, recorded.terminology, language);
+      const options: ValueListOption[] = list.items.map((item) => ({
+        code: item.code,
+        label: item.description,
+        description: null,
+        ordinal: null,
+        bindings: [],
+        userCode: item.user_code,
+      }));
+      return {
+        kind: "list",
+        model: { ...model, terminology: recorded.terminology, options },
+        source: "code-list-service",
+        languages: list.languages,
+        sourceUrl: list.source_url,
+      };
+    } catch (e) {
+      return {
+        kind: "external-unavailable",
+        model,
+        reason: `The code list ${recorded.terminology} couldn't be loaded: ${String(e)}`,
+        description: null,
+      };
+    }
   }
 
   let reason = "The template doesn't name a value set for this field.";
@@ -453,4 +531,33 @@ export function shouldEscapeCloseValuePanel(
   view: { panelOpen: boolean; dialogOpen: boolean },
 ): boolean {
   return event.key === "Escape" && !event.defaultPrevented && view.panelOpen && !view.dialogOpen;
+}
+
+/** Where the panel's list (or recorded-code description) came from, for display. */
+export function listSource(
+  state: PanelState,
+  templateId: string | null,
+): { label: string; url: string | null } | null {
+  if (state.kind === "list") {
+    if (state.source === "template") {
+      return {
+        label: templateId ? `Template ${templateId} (Web Template)` : "Template (Web Template)",
+        url: null,
+      };
+    }
+    if (state.source === "code-list-service") {
+      return {
+        label: `Code-list service, code system ${state.model.terminology ?? "unknown"}`,
+        url: state.sourceUrl ?? null,
+      };
+    }
+    return {
+      label: "FHIR terminology server, value set expansion",
+      url: state.model.valueSetUrl,
+    };
+  }
+  if (state.kind === "external-unavailable" && state.description) {
+    return { label: "FHIR terminology server, code lookup", url: null };
+  }
+  return null;
 }

@@ -25,6 +25,11 @@ pub struct ServerProfile {
     pub admin_auth_method: Option<AuthMethod>,
     #[serde(default)]
     pub terminology_url: Option<String>,
+    /// Base URL of a deployment-specific code-list service (e.g. the Zorica
+    /// terminology adapter next to a Better CDR) serving template-local code
+    /// systems like `A06_smoking` that templates don't enumerate (PRD-0019).
+    #[serde(default)]
+    pub code_list_url: Option<String>,
     /// Path appended to `base_url` to reach the openEHR REST API root.
     /// `None` means [`DEFAULT_API_PATH_PREFIX`] (`/rest/openehr/v1`).
     #[serde(default)]
@@ -86,6 +91,7 @@ impl From<ServerProfileInput> for ServerProfile {
             auth_method: input.auth_method,
             admin_auth_method: input.admin_auth_method,
             terminology_url: input.terminology_url,
+            code_list_url: input.code_list_url,
             api_path_prefix: normalize_api_path_prefix(input.api_path_prefix),
             is_default: false,
         }
@@ -110,6 +116,11 @@ pub struct ServerProfilePublic {
     pub admin_auth_method: Option<AuthMethodPublic>,
     #[serde(default)]
     pub terminology_url: Option<String>,
+    /// Base URL of a deployment-specific code-list service (e.g. the Zorica
+    /// terminology adapter next to a Better CDR) serving template-local code
+    /// systems like `A06_smoking` that templates don't enumerate (PRD-0019).
+    #[serde(default)]
+    pub code_list_url: Option<String>,
     /// Path appended to `base_url` to reach the openEHR REST API root.
     /// `None` means [`DEFAULT_API_PATH_PREFIX`] (`/rest/openehr/v1`).
     #[serde(default)]
@@ -131,6 +142,11 @@ pub struct ServerProfileInput {
     pub admin_auth_method: Option<AuthMethod>,
     #[serde(default)]
     pub terminology_url: Option<String>,
+    /// Base URL of a deployment-specific code-list service (e.g. the Zorica
+    /// terminology adapter next to a Better CDR) serving template-local code
+    /// systems like `A06_smoking` that templates don't enumerate (PRD-0019).
+    #[serde(default)]
+    pub code_list_url: Option<String>,
     /// Path appended to `base_url` to reach the openEHR REST API root.
     /// `None` means [`DEFAULT_API_PATH_PREFIX`] (`/rest/openehr/v1`).
     #[serde(default)]
@@ -195,6 +211,11 @@ pub struct StoredProfile {
     pub admin_auth_method: Option<StoredAuthMethod>,
     #[serde(default)]
     pub terminology_url: Option<String>,
+    /// Base URL of a deployment-specific code-list service (e.g. the Zorica
+    /// terminology adapter next to a Better CDR) serving template-local code
+    /// systems like `A06_smoking` that templates don't enumerate (PRD-0019).
+    #[serde(default)]
+    pub code_list_url: Option<String>,
     /// Path appended to `base_url` to reach the openEHR REST API root.
     /// `None` means [`DEFAULT_API_PATH_PREFIX`] (`/rest/openehr/v1`).
     #[serde(default)]
@@ -430,6 +451,7 @@ fn load_resolved_profile(
         auth_method,
         admin_auth_method,
         terminology_url: stored.terminology_url.clone(),
+        code_list_url: stored.code_list_url.clone(),
         api_path_prefix: stored.api_path_prefix.clone(),
         is_default: stored.is_default,
     })
@@ -449,6 +471,7 @@ fn to_public_profile(profile: &ServerProfile, backend: &StorageBackend) -> Serve
         auth_method: to_public_auth(&profile.auth_method),
         admin_auth_method: profile.admin_auth_method.as_ref().map(to_public_auth),
         terminology_url: profile.terminology_url.clone(),
+        code_list_url: profile.code_list_url.clone(),
         api_path_prefix: profile.api_path_prefix.clone(),
         credential_backend: backend_str.to_string(),
         is_default: profile.is_default,
@@ -499,6 +522,7 @@ pub fn migrate_plaintext_credentials() {
                         auth_method: to_stored_auth(&full.auth_method),
                         admin_auth_method: full.admin_auth_method.as_ref().map(to_stored_auth),
                         terminology_url: full.terminology_url,
+                        code_list_url: full.code_list_url,
                         api_path_prefix: full.api_path_prefix,
                         is_default: full.is_default,
                     });
@@ -620,6 +644,7 @@ pub async fn save_server_profile(
         auth_method: to_stored_auth(&profile.auth_method),
         admin_auth_method: profile.admin_auth_method.as_ref().map(to_stored_auth),
         terminology_url: profile.terminology_url,
+        code_list_url: profile.code_list_url,
         api_path_prefix: normalize_api_path_prefix(profile.api_path_prefix),
         is_default,
     };
@@ -892,6 +917,7 @@ mod tests {
             auth_method: AuthMethod::None,
             admin_auth_method: None,
             terminology_url: None,
+            code_list_url: None,
             api_path_prefix: prefix.map(String::from),
         }
     }

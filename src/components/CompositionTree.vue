@@ -23,12 +23,14 @@ const props = withDefaults(defineProps<Props>(), {
   selectedTreePath: null,
 });
 
+// "list": the terminology badge was clicked — show the full value list.
+// "detail": the value itself was clicked — show only the recorded code.
 const emit = defineEmits<{
-  "select-coded-value": [selection: CodedValueSelection];
+  "select-coded-value": [selection: CodedValueSelection, mode: "list" | "detail"];
 }>();
 
-const onSelectCodedValue = (selection: CodedValueSelection) =>
-  emit("select-coded-value", selection);
+const onSelectCodedValue = (selection: CodedValueSelection, mode: "list" | "detail") =>
+  emit("select-coded-value", selection, mode);
 
 interface TreeNode {
   key: string;
@@ -138,6 +140,9 @@ function buildTree(
     const selection: CodedValueSelection | null = recorded
       ? { aqlPath, treePath: parentPath || "/", elementName: parentName, recorded }
       : null;
+    // Ordinals carry their terminology on `symbol`; badge it like coded text
+    // so the value list can be opened from it.
+    if (recorded && !terminologyBadge) terminologyBadge = recorded.terminology;
 
     return [
       {
@@ -287,7 +292,7 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
     serverId: { type: String, default: null },
     selectedTreePath: { type: String, default: null },
     onSelectCodedValue: {
-      type: Function as PropType<(selection: Selection) => void>,
+      type: Function as PropType<(selection: Selection, mode: "list" | "detail") => void>,
       default: null,
     },
   },
@@ -366,15 +371,23 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
         const tooltip = isInternal
           ? `Internal terminology — codes defined within the openEHR reference model`
           : `External terminology — codes from ${node.terminologyBadge} require lookup against a terminology server`;
+        const badgeClass = ["badge", "term-badge", isInternal ? "term-internal" : "term-external"];
+        const selection = node.selection;
         headerChildren.push(
-          h(
-            "span",
-            {
-              class: ["badge", "term-badge", isInternal ? "term-internal" : "term-external"],
-              title: tooltip,
-            },
-            node.terminologyBadge,
-          ),
+          selection && props.onSelectCodedValue
+            ? // Clicking the terminology opens the field's full value list (PRD-0019).
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: [...badgeClass, "term-badge-button"],
+                  title: `${tooltip}. Click to show all values of ${node.terminologyBadge}.`,
+                  "aria-label": `Show all values of ${node.terminologyBadge}`,
+                  onClick: () => props.onSelectCodedValue?.(selection, "list"),
+                },
+                node.terminologyBadge,
+              )
+            : h("span", { class: badgeClass, title: tooltip }, node.terminologyBadge),
         );
       }
 
@@ -412,9 +425,9 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
                   "coded-value-button",
                   { selected: props.selectedTreePath === node.path },
                 ],
-                title: "Show the full value list",
+                title: "Show the recorded code",
                 "aria-pressed": props.selectedTreePath === node.path,
-                onClick: () => props.onSelectCodedValue?.(selection),
+                onClick: () => props.onSelectCodedValue?.(selection, "detail"),
               },
               valueContent,
             ),
@@ -560,6 +573,17 @@ const TreeNodeComponent: ReturnType<typeof defineComponent> = defineComponent({
   text-decoration: underline;
 }
 :deep(.coded-value-button:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+:deep(.term-badge-button) {
+  font-family: inherit;
+  cursor: pointer;
+}
+:deep(.term-badge-button:hover) {
+  text-decoration: underline;
+}
+:deep(.term-badge-button:focus-visible) {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }

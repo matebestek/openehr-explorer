@@ -1,3 +1,4 @@
+pub mod code_list;
 pub mod composition;
 pub mod contribution;
 pub mod dashboard;

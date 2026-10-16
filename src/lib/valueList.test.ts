@@ -5,12 +5,15 @@ import {
   childAqlPath,
   extractRecordedCode,
   extractValueSetUrl,
+  listSource,
   loadExternalState,
   resolvePanelState,
   shouldEscapeCloseValuePanel,
   findTemplateNodeByAqlPath,
   normaliseBindings,
   pickLanguage,
+  recordedOption,
+  usesCodeListService,
   stripNamePredicates,
   templateLanguages,
   visibleOptions,
@@ -613,5 +616,157 @@ describe("shouldEscapeCloseValuePanel", () => {
         { panelOpen: false, dialogOpen: false },
       ),
     ).toBe(false);
+  });
+});
+
+describe("usesCodeListService", () => {
+  it("is true for template-local code systems only", () => {
+    expect(usesCodeListService("A06_smoking")).toBe(true);
+    expect(usesCodeListService("Z_lymph_nodes")).toBe(true);
+    for (const id of [
+      "SNOMED-CT",
+      "snomed",
+      "LOINC",
+      "ICD-10",
+      "ICD11",
+      "ATC",
+      "local",
+      "openehr",
+    ]) {
+      expect(usesCodeListService(id)).toBe(false);
+    }
+    expect(usesCodeListService("http://snomed.info/sct")).toBe(false);
+    expect(usesCodeListService("urn:oid:1.2.3")).toBe(false);
+  });
+});
+
+const recSmoking: RecordedCode = {
+  rmType: "DV_CODED_TEXT",
+  terminology: "A06_smoking",
+  code: "2",
+  label: "Bivša kadilka",
+  ordinal: null,
+};
+
+const smokingCodeList = {
+  code_system: "A06_smoking",
+  languages: ["sl", "en"],
+  items: [
+    { code: "1", description: "Never smoked", user_code: "A06.1" },
+    { code: "2", description: "Former smoker", user_code: "A06.2" },
+    { code: "3", description: "Current smoker", user_code: "A06.3" },
+  ],
+  complete: true,
+  source_url:
+    "https://cdr.example/terminology-adapter/rest/terminology/codesystem/A06_smoking/entities?language=en",
+};
+
+describe("loadExternalState with a code-list service", () => {
+  const localModel = buildValueListModel(
+    { id: "overall_status", name: "Overall status", rmType: "DV_CODED_TEXT" },
+    "en",
+  );
+
+  it("lists a template-local code system from the code-list service in the requested language", async () => {
+    const getCodeList = vi.fn(async () => smokingCodeList);
+    const deps = { expandValueSet: vi.fn(), describeCode: vi.fn(), getCodeList };
+    const s = await loadExternalState("srv", localModel, recSmoking, deps, "en");
+    expect(getCodeList).toHaveBeenCalledWith("srv", "A06_smoking", "en");
+    expect(s).toMatchObject({ kind: "list", source: "code-list-service", languages: ["sl", "en"] });
+    expect(s.kind === "list" && s.model.options[1]).toEqual({
+      code: "2",
+      label: "Former smoker",
+      description: null,
+      ordinal: null,
+      bindings: [],
+      userCode: "A06.2",
+    });
+    expect(deps.describeCode).not.toHaveBeenCalled();
+    expect(deps.expandValueSet).not.toHaveBeenCalled();
+  });
+
+  it("explains a code-list service failure without asking the FHIR server", async () => {
+    const deps = {
+      expandValueSet: vi.fn(),
+      describeCode: vi.fn(),
+      getCodeList: async () => {
+        throw "No code-list service URL is configured for this server.";
+      },
+    };
+    expect(await loadExternalState("srv", localModel, recSmoking, deps, "sl")).toEqual({
+      kind: "external-unavailable",
+      model: localModel,
+      reason:
+        "The code list A06_smoking couldn't be loaded: No code-list service URL is configured for this server.",
+      description: null,
+    });
+    expect(deps.describeCode).not.toHaveBeenCalled();
+  });
+
+  it("still sends standard terminologies to the FHIR server", async () => {
+    const getCodeList = vi.fn();
+    const deps = { expandValueSet: vi.fn(), describeCode: async () => descEx, getCodeList };
+    await loadExternalState("srv", { ...externalModel, valueSetUrl: null }, recSnomed, deps, "en");
+    expect(getCodeList).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordedOption", () => {
+  it("returns the list entry for the recorded code, or null", () => {
+    const options = [opt("1"), opt("2")];
+    expect(recordedOption(options, rec("2"))?.code).toBe("2");
+    expect(recordedOption(options, rec("9"))).toBeNull();
+  });
+});
+
+describe("listSource", () => {
+  const model = buildValueListModel(smokingNode, "en");
+
+  it("names the template for template lists", () => {
+    expect(listSource({ kind: "list", model, source: "template" }, "Anamnesis")).toEqual({
+      label: "Template Anamnesis (Web Template)",
+      url: null,
+    });
+  });
+
+  it("names the code system and the URL it was fetched from for code-list service lists", async () => {
+    const deps = {
+      expandValueSet: vi.fn(),
+      describeCode: vi.fn(),
+      getCodeList: async () => smokingCodeList,
+    };
+    const state = await loadExternalState("srv", model, recSmoking, deps, "en");
+    expect(listSource(state, "Anamnesis")).toEqual({
+      label: "Code-list service, code system A06_smoking",
+      url: smokingCodeList.source_url,
+    });
+  });
+
+  it("names the value set for terminology server expansions", () => {
+    expect(
+      listSource(
+        {
+          kind: "list",
+          model: { ...model, valueSetUrl: "http://example.org/vs/smoking" },
+          source: "terminology-server",
+        },
+        null,
+      ),
+    ).toEqual({
+      label: "FHIR terminology server, value set expansion",
+      url: "http://example.org/vs/smoking",
+    });
+  });
+
+  it("names the FHIR lookup when only the recorded code could be described", () => {
+    expect(
+      listSource(
+        { kind: "external-unavailable", model, reason: "r", description: descEx },
+        "Anamnesis",
+      ),
+    ).toEqual({ label: "FHIR terminology server, code lookup", url: null });
+    expect(
+      listSource({ kind: "external-unavailable", model, reason: "r", description: null }, null),
+    ).toBeNull();
   });
 });

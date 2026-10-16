@@ -90,6 +90,7 @@ const meta: Meta<typeof ValueListPanel> = {
     languages: ["sl", "en"],
     language: "sl",
     templateId: "Anamnesis",
+    mode: "list",
     onClose: fn(),
     "onUpdate:language": fn(),
   },
@@ -181,4 +182,61 @@ export const NotMatched: Story = {
 
 export const Loading: Story = {
   args: { state: { kind: "loading" } },
+};
+
+const codeListModel: ValueListModel = {
+  ...smokingModel,
+  fieldName: "Kajenje",
+  fieldDescription: "*Statement about current smoking behaviour for all types of tobacco. (en)",
+  options: [
+    {
+      code: "1",
+      label: "Nikoli ni kadila",
+      description: null,
+      ordinal: null,
+      bindings: [],
+      userCode: "A06.1",
+    },
+    {
+      code: "2",
+      label: "Bivša kadilka",
+      description: null,
+      ordinal: null,
+      bindings: [],
+      userCode: "A06.2",
+    },
+    {
+      code: "3",
+      label: "Kadilka",
+      description: null,
+      ordinal: null,
+      bindings: [],
+      userCode: "A06.3",
+    },
+  ],
+  annotations: {},
+};
+
+export const CodeListService: Story = {
+  args: {
+    selection: {
+      ...smokingSelection,
+      recorded: { ...smokingSelection.recorded, label: "Bivša kadilka" },
+    },
+    state: {
+      kind: "list",
+      model: codeListModel,
+      source: "code-list-service",
+      languages: ["sl", "en"],
+      sourceUrl:
+        "https://cdr.example.com/terminology-adapter/rest/terminology/codesystem/A06_smoking/entities?language=sl",
+    },
+  },
+};
+
+export const RecordedCodeDetail: Story = {
+  args: {
+    ...CodeListService.args,
+    mode: "detail",
+  },
 };

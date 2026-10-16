@@ -50,6 +50,8 @@ const showFlatPaths = computed(() => rightPanel.value === "paths");
 const valueSelection = ref<CodedValueSelection | null>(null);
 const valuePanelState = ref<PanelState>({ kind: "loading" });
 const valuePanelLanguage = ref<string | null>(null);
+// "list" when opened from the terminology badge, "detail" from the value.
+const valuePanelMode = ref<"list" | "detail">("list");
 // Bumped per selection so a slow terminology-server answer for an earlier
 // click can't overwrite the panel for a later one.
 let valueRequestId = 0;
@@ -271,18 +273,21 @@ watch(panelSearchQuery, () => {
   currentMatchIndex.value = 0;
 });
 
-const valuePanelLanguages = computed(() =>
-  webTemplate.value ? templateLanguages(webTemplate.value).languages : [],
-);
+const valuePanelLanguages = computed(() => {
+  const state = valuePanelState.value;
+  // Code-list service lists have their own languages (e.g. sl/en).
+  if (state.kind === "list" && state.languages) return state.languages;
+  return webTemplate.value ? templateLanguages(webTemplate.value).languages : [];
+});
 
 const valuePanelTemplateId = computed(() => {
   const id = (composition.value as any)?.archetype_details?.template_id?.value;
   return typeof id === "string" ? id : null;
 });
 
-async function showValueList(selection: CodedValueSelection) {
-  const requestId = ++valueRequestId;
+async function showValueList(selection: CodedValueSelection, mode: "list" | "detail") {
   valueSelection.value = selection;
+  valuePanelMode.value = mode;
   rightPanel.value = "values";
   const { languages, defaultLanguage } = webTemplate.value
     ? templateLanguages(webTemplate.value)
@@ -294,7 +299,12 @@ async function showValueList(selection: CodedValueSelection) {
     defaultLanguage,
   );
 
-  const state = resolvePanelState(webTemplate.value, selection, valuePanelLanguage.value);
+  await resolveValuePanel(selection, valuePanelLanguage.value);
+}
+
+async function resolveValuePanel(selection: CodedValueSelection, language: string | null) {
+  const requestId = ++valueRequestId;
+  const state = resolvePanelState(webTemplate.value, selection, language);
   if (state.kind !== "needs-external") {
     valuePanelState.value = state;
     return;
@@ -304,6 +314,8 @@ async function showValueList(selection: CodedValueSelection) {
     serverStore.activeServerId,
     state.model,
     selection.recorded,
+    undefined,
+    language,
   );
   if (requestId === valueRequestId) valuePanelState.value = external;
 }
@@ -311,11 +323,11 @@ async function showValueList(selection: CodedValueSelection) {
 function changeValuePanelLanguage(language: string) {
   valuePanelLanguage.value = language;
   const selection = valueSelection.value;
-  // Only template-backed lists have translations; external lists stay as fetched.
-  if (!selection || valuePanelState.value.kind !== "list") return;
-  if (valuePanelState.value.source !== "template") return;
-  const state = resolvePanelState(webTemplate.value, selection, language);
-  if (state.kind !== "needs-external") valuePanelState.value = state;
+  const state = valuePanelState.value;
+  // Template lists re-render from the Web Template; code-list service lists
+  // are re-fetched in the new language. FHIR expansions stay as fetched.
+  if (!selection || state.kind !== "list" || state.source === "terminology-server") return;
+  void resolveValuePanel(selection, language);
 }
 
 function closeValuePanel() {
@@ -557,6 +569,7 @@ onUnmounted(() => {
         :languages="valuePanelLanguages"
         :language="valuePanelLanguage"
         :template-id="valuePanelTemplateId"
+        :mode="valuePanelMode"
         @close="closeValuePanel"
         @update:language="changeValuePanelLanguage"
       />

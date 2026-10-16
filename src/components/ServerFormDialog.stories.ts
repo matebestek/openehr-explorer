@@ -13,6 +13,7 @@ const CADASTO_PROFILE: ServerProfile = {
   auth_method: { type: "none" },
   admin_auth_method: null,
   terminology_url: null,
+  code_list_url: null,
   api_path_prefix: "/openehr/v1",
   credential_backend: "encrypted_file",
   is_default: false,

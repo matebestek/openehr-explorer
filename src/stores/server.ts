@@ -19,6 +19,7 @@ export interface ServerProfile {
     | { type: "bearer"; has_token: boolean }
     | null;
   terminology_url?: string | null;
+  code_list_url?: string | null;
   /** Path appended to base_url to reach the openEHR REST root. null/empty → DEFAULT_API_PATH_PREFIX. */
   api_path_prefix?: string | null;
   credential_backend: string;
@@ -41,6 +42,7 @@ export interface ServerProfileInput {
     | { type: "bearer"; token: string }
     | null;
   terminology_url?: string | null;
+  code_list_url?: string | null;
   /** Path appended to base_url to reach the openEHR REST root. null/empty → DEFAULT_API_PATH_PREFIX. */
   api_path_prefix?: string | null;
 }

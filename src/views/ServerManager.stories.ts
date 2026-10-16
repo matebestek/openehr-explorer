@@ -15,6 +15,7 @@ const FERRO_PROFILE: ServerProfile = {
   auth_method: { type: "basic", username: "ferro-user", has_password: true },
   admin_auth_method: null,
   terminology_url: null,
+  code_list_url: null,
   credential_backend: "encrypted_file",
   is_default: false,
 };
@@ -27,6 +28,7 @@ const INSECURE_PROFILE: ServerProfile = {
   auth_method: { type: "none" },
   admin_auth_method: null,
   terminology_url: null,
+  code_list_url: null,
   credential_backend: "os_keychain",
   is_default: true,
 };
@@ -39,6 +41,7 @@ const CUSTOM_PREFIX_PROFILE: ServerProfile = {
   auth_method: { type: "none" },
   admin_auth_method: null,
   terminology_url: null,
+  code_list_url: null,
   api_path_prefix: "/openehr/v1",
   credential_backend: "encrypted_file",
   is_default: false,

@@ -1,22 +1,26 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import {
+  listSource,
+  recordedOption,
   visibleOptions,
   type CodedValueSelection,
   type PanelState,
   type TermBindingRef,
 } from "../lib/valueList";
 
-// Escape-to-close is handled by CompositionViewer's window key handler.
-// Side panel showing a clicked coded value within its full value list
-// (PRD-0019). Presentational only: CompositionViewer resolves `state` via
-// src/lib/valueList.ts and owns selection/language.
+// Side panel for a clicked coded value (PRD-0019). `mode: "list"` shows the
+// value within its full value list; `mode: "detail"` shows only the recorded
+// code's own entry. Presentational only: CompositionViewer resolves `state`
+// via src/lib/valueList.ts and owns selection/language/mode. Escape-to-close
+// is handled by CompositionViewer's window key handler.
 const props = defineProps<{
   selection: CodedValueSelection;
   state: PanelState;
   languages: string[];
   language: string | null;
   templateId: string | null;
+  mode: "list" | "detail";
 }>();
 
 const emit = defineEmits<{
@@ -51,6 +55,17 @@ const pinnedNote = computed(() => {
     ? "recorded — not in template list"
     : "recorded — not in the value set";
 });
+
+// The recorded code's own list entry, for detail mode.
+const recordedEntry = computed(() =>
+  props.state.kind === "list"
+    ? recordedOption(props.state.model.options, props.selection.recorded)
+    : null,
+);
+
+const hasUserCodes = computed(() => visible.value?.rows.some((o) => o.userCode) ?? false);
+
+const source = computed(() => listSource(props.state, props.templateId));
 
 const hasOrdinals = computed(() => visible.value?.rows.some((o) => o.ordinal !== null) ?? false);
 
@@ -136,15 +151,43 @@ watch(
           </button>
         </div>
 
-        <template v-if="state.kind === 'list' && visible">
-          <p v-if="state.source === 'terminology-server'" class="caption">
-            From the terminology server
+        <template v-if="state.kind === 'list' && mode === 'detail'">
+          <dl class="recorded-summary">
+            <dt>Recorded</dt>
+            <dd>{{ recordedEntry?.label ?? selection.recorded.label ?? "—" }}</dd>
+            <dt>Code</dt>
+            <dd class="mono">{{ selection.recorded.code }}</dd>
+            <template v-if="recordedEntry?.userCode">
+              <dt>User code</dt>
+              <dd class="mono">{{ recordedEntry.userCode }}</dd>
+            </template>
+            <template v-if="recordedEntry?.description">
+              <dt>Description</dt>
+              <dd>{{ recordedEntry.description }}</dd>
+            </template>
+            <template v-if="selection.recorded.ordinal !== null">
+              <dt>Score</dt>
+              <dd>{{ selection.recorded.ordinal }}</dd>
+            </template>
+            <template v-if="recordedEntry && recordedEntry.bindings.length > 0">
+              <dt>Bindings</dt>
+              <dd class="mono">
+                {{ recordedEntry.bindings.map((b) => `${b.terminology} ${b.code}`).join(", ") }}
+              </dd>
+            </template>
+          </dl>
+          <p v-if="!recordedEntry" class="status">
+            The recorded code isn't in this field's value list.
           </p>
+        </template>
+
+        <template v-else-if="state.kind === 'list' && visible">
           <table class="options">
             <thead>
               <tr>
                 <th scope="col">Code</th>
                 <th scope="col">Label</th>
+                <th v-if="hasUserCodes" scope="col">User code</th>
                 <th v-if="hasOrdinals" scope="col">Score</th>
               </tr>
             </thead>
@@ -159,6 +202,7 @@ watch(
                   {{ selection.recorded.label ?? "—" }}
                   <div class="option-description">{{ pinnedNote }}</div>
                 </td>
+                <td v-if="hasUserCodes"></td>
                 <td v-if="hasOrdinals">{{ selection.recorded.ordinal ?? "" }}</td>
               </tr>
               <tr
@@ -174,6 +218,7 @@ watch(
                     {{ option.description }}
                   </div>
                 </td>
+                <td v-if="hasUserCodes" class="mono">{{ option.userCode ?? "" }}</td>
                 <td v-if="hasOrdinals">{{ option.ordinal ?? "" }}</td>
               </tr>
             </tbody>
@@ -215,6 +260,12 @@ watch(
             </template>
           </dl>
         </template>
+
+        <section v-if="source" class="extra source">
+          <h4>Source</h4>
+          <p>{{ source.label }}</p>
+          <p v-if="source.url" class="mono source-url">{{ source.url }}</p>
+        </section>
 
         <section v-if="annotations.length > 0" class="extra">
           <h4>Annotations</h4>
@@ -372,6 +423,14 @@ watch(
 }
 .extra li {
   padding: 2px 0;
+}
+
+.source p {
+  color: var(--color-text-secondary);
+}
+.source-url {
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .recorded-summary {

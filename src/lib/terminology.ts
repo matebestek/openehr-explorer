@@ -177,3 +177,31 @@ export function testSubsumption(
     codeB,
   });
 }
+
+export interface CodeListItem {
+  code: string;
+  description: string | null;
+  user_code: string | null;
+}
+
+export interface CodeList {
+  code_system: string;
+  languages: string[];
+  items: CodeListItem[];
+  complete: boolean;
+  /** The URL the list was fetched from (paging dropped). */
+  source_url: string;
+}
+
+/**
+ * Every code of a template-local code system (e.g. `A06_smoking`) from the
+ * server profile's code-list service — see `get_code_list` in
+ * src-tauri/src/commands/code_list.rs. Rejects with a readable message.
+ */
+export function getCodeList(
+  serverId: string,
+  codeSystem: string,
+  language: string | null,
+): Promise<CodeList> {
+  return invoke<CodeList>("get_code_list", { serverId, codeSystem, language });
+}

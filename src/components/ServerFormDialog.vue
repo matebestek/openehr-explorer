@@ -138,6 +138,7 @@ function initNewForm() {
     server_type: "ehrbase",
     auth_method: { type: "basic", username: "", password: "" },
     terminology_url: null,
+    code_list_url: null,
     api_path_prefix: null,
   };
   editingExistingId.value = null;
@@ -161,6 +162,7 @@ function initEditForm(profile: ServerProfile) {
       ? publicAuthToInput(profile.admin_auth_method)
       : null,
     terminology_url: profile.terminology_url || null,
+    code_list_url: profile.code_list_url || null,
     api_path_prefix: profile.api_path_prefix ?? null,
   };
   editingExistingId.value = profile.id;
@@ -568,6 +570,20 @@ useEscapeKey(() => props.open, handleClose);
             />
             <p class="form-help">
               Overrides the global default for this profile. Leave empty to use the global setting.
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label for="server-code-list-url">Code-list service URL (optional)</label>
+            <input
+              id="server-code-list-url"
+              class="input"
+              v-model="form.code_list_url"
+              placeholder="e.g. https://cdr.example.com/terminology-adapter/rest/terminology"
+            />
+            <p class="form-help">
+              Serves template-local code lists (e.g. <code>A06_smoking</code>) that the template
+              itself doesn't list, such as the terminology adapter used by Better forms.
             </p>
           </div>
 
