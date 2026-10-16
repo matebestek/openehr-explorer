@@ -205,3 +205,96 @@ export function getCodeList(
 ): Promise<CodeList> {
   return invoke<CodeList>("get_code_list", { serverId, codeSystem, language });
 }
+
+// --- Local code systems (code-list service) ---------------------------------
+// Template-local code systems such as `A06_smoking` come from the server
+// profile's code-list service, not the FHIR terminology server — see
+// src-tauri/src/commands/code_list.rs and PRD-0019's amendment.
+
+export interface CodeSystemSummary {
+  code: string;
+  description: string | null;
+  languages: string[];
+}
+
+/** Every code system the active profile's code-list service offers (empty without one). */
+export function listCodeSystems(serverId: string): Promise<CodeSystemSummary[]> {
+  return invoke<CodeSystemSummary[]>("list_code_systems", { serverId });
+}
+
+export interface CodeListEntry {
+  code_system: string;
+  code: string;
+  description: string | null;
+  user_code: string | null;
+  source_url: string;
+}
+
+/** One code from a local code system; `null` if the code system doesn't have it. */
+export function getCodeListEntry(
+  serverId: string,
+  codeSystem: string,
+  code: string,
+  language: string | null,
+): Promise<CodeListEntry | null> {
+  return invoke<CodeListEntry | null>("get_code_list_entry", {
+    serverId,
+    codeSystem,
+    code,
+    language,
+  });
+}
+
+export interface LocalSystemOption {
+  value: string;
+  label: string;
+  languages: string[];
+}
+
+/** Picker options for local code systems, labelled by description where it says more than the id. */
+export function localSystemOptions(systems: CodeSystemSummary[]): LocalSystemOption[] {
+  return systems
+    .map((s) => ({
+      value: s.code,
+      label: s.description && s.description !== s.code ? `${s.description} (${s.code})` : s.code,
+      languages: s.languages,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+}
+
+/** A code-list entry in the shape the Describe tab renders for FHIR `$lookup` results. */
+export function codeListEntryToDescription(
+  entry: CodeListEntry,
+  language: string | null,
+): CodeDescription {
+  const properties: TerminologyProperty[] = [];
+  if (entry.user_code) properties.push({ code: "user_code", value: entry.user_code });
+  if (language) properties.push({ code: "language", value: language });
+  return {
+    system: entry.code_system,
+    code: entry.code,
+    display: entry.description,
+    designations: [],
+    properties,
+  };
+}
+
+/** A code-list lookup in the shape the Validate tab renders for FHIR `$validate-code` results. */
+export function codeListEntryToValidation(
+  entry: CodeListEntry | null,
+  codeSystem: string,
+  code: string,
+): CodeValidation {
+  return entry
+    ? { result: true, message: null, display: entry.description }
+    : { result: false, message: `Code ${code} is not in ${codeSystem}.`, display: null };
+}
+
+/** Client-side filter for a full code list: code, description or user code, case-insensitive. */
+export function filterCodeListItems(items: CodeListItem[], filter: string): CodeListItem[] {
+  const needle = filter.trim().toLowerCase();
+  if (!needle) return items;
+  return items.filter((i) =>
+    [i.code, i.description, i.user_code].some((v) => v?.toLowerCase().includes(needle)),
+  );
+}

@@ -21,7 +21,7 @@
 // rather than silently discarding it.
 import { computed } from "vue";
 import SearchableSelect, { type SearchableSelectOption } from "./SearchableSelect.vue";
-import { TERMINOLOGY_SYSTEMS } from "../lib/terminology";
+import { TERMINOLOGY_SYSTEMS, type LocalSystemOption } from "../lib/terminology";
 
 const props = defineProps<{
   modelValue: string;
@@ -32,6 +32,12 @@ const props = defineProps<{
    * static a11y analysis, like a label with no real form control.
    */
   label: string;
+  /**
+   * Template-local code systems from the active profile's code-list service
+   * (e.g. `A06_smoking`), listed after the FHIR systems. Omit where they
+   * don't apply (e.g. subsumption — local code lists are flat).
+   */
+  localSystems?: LocalSystemOption[];
 }>();
 
 const emit = defineEmits<{
@@ -40,16 +46,31 @@ const emit = defineEmits<{
 
 const CUSTOM = "__custom__";
 
+const localSystems = computed(() => props.localSystems ?? []);
+
 const options = computed<SearchableSelectOption[]>(() => [
   ...TERMINOLOGY_SYSTEMS.map((s) => ({ value: s.value, label: s.label })),
+  ...localSystems.value.map((s) => ({ value: s.value, label: s.label })),
   { value: CUSTOM, label: "Custom…" },
 ]);
 
-const uriByValue = computed(() =>
-  Object.fromEntries(TERMINOLOGY_SYSTEMS.map((s) => [s.value, s.uri])),
-);
+// Secondary line per option: the canonical URI for FHIR systems, "Code list"
+// plus its languages for local ones.
+const hintByValue = computed<Record<string, string>>(() => ({
+  ...Object.fromEntries(TERMINOLOGY_SYSTEMS.map((s) => [s.value, s.uri])),
+  ...Object.fromEntries(
+    localSystems.value.map((s) => [
+      s.value,
+      s.languages.length ? `Code list · ${s.languages.join(", ")}` : "Code list",
+    ]),
+  ),
+}));
 
-const isCustom = computed(() => !TERMINOLOGY_SYSTEMS.some((s) => s.value === props.modelValue));
+const isCustom = computed(
+  () =>
+    !TERMINOLOGY_SYSTEMS.some((s) => s.value === props.modelValue) &&
+    !localSystems.value.some((s) => s.value === props.modelValue),
+);
 const selectValue = computed(() => (isCustom.value ? CUSTOM : props.modelValue));
 
 function onSelect(value: string | null) {
@@ -75,8 +96,8 @@ function onCustomInput(e: Event) {
       <template #option="{ option }">
         <span class="system-option">
           <span class="system-option-label">{{ option.label }}</span>
-          <span v-if="uriByValue[option.value ?? '']" class="system-option-uri">
-            {{ uriByValue[option.value ?? ""] }}
+          <span v-if="hintByValue[option.value ?? '']" class="system-option-uri">
+            {{ hintByValue[option.value ?? ""] }}
           </span>
         </span>
       </template>

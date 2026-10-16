@@ -52,3 +52,23 @@ export const SwitchToCustom: Story = {
     await expect(canvas.getByPlaceholderText(/canonical system uri/i)).toBeInTheDocument();
   },
 };
+
+const localSystems = [
+  { value: "A06_smoking", label: "A06_smoking", languages: ["sl", "en"] },
+  { value: "Gender", label: "Spol (Gender)", languages: ["sl"] },
+];
+
+/** A local code system from the server's code-list service is selected; it's listed after the FHIR systems. */
+export const LocalCodeSystem: Story = {
+  args: { modelValue: "A06_smoking", localSystems },
+};
+
+/** Local code systems appear in the open dropdown, each marked as a code list with its languages. */
+export const LocalSystemsListed: Story = {
+  args: { modelValue: "SNOMED-CT", localSystems },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: /terminology system/i }));
+    await expect(await canvas.findByText("Code list · sl, en")).toBeInTheDocument();
+  },
+};

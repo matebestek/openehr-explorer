@@ -246,6 +246,8 @@ pub fn run() {
             settings::save_settings,
             // Terminology
             code_list::get_code_list,
+            code_list::list_code_systems,
+            code_list::get_code_list_entry,
             terminology::lookup_code,
             terminology::describe_code,
             terminology::expand_valueset,

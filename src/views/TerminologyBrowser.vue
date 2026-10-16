@@ -8,12 +8,22 @@ import { useAnalytics } from "../composables/useAnalytics";
 import CopyButton from "../components/CopyButton.vue";
 import TerminologySystemSelect from "../components/TerminologySystemSelect.vue";
 import TourReplayButton from "../components/TourReplayButton.vue";
+import SearchableSelect from "../components/SearchableSelect.vue";
 import {
   describeCode,
   expandValueSet,
   validateCode,
   testSubsumption,
   terminologySystemAnalyticsKey,
+  listCodeSystems,
+  getCodeListEntry,
+  getCodeList,
+  localSystemOptions,
+  codeListEntryToDescription,
+  codeListEntryToValidation,
+  filterCodeListItems,
+  type CodeList,
+  type LocalSystemOption,
   type CodeDescription,
   type ValueSetExpansion,
   type CodeValidation,
@@ -89,6 +99,39 @@ const effectiveTerminologyUrl = computed(
   () => serverStore.activeServer?.terminology_url || settingsStore.settings.terminology_server_url,
 );
 
+// Template-local code systems (e.g. `A06_smoking`) from the profile's
+// code-list service — offered alongside the FHIR systems on Describe and
+// Validate, and listable in full on Expand (PRD-0019 amendment).
+const codeListConfigured = computed(() => !!serverStore.activeServer?.code_list_url?.trim());
+const terminologyAvailable = computed(
+  () => !!effectiveTerminologyUrl.value || codeListConfigured.value,
+);
+const localSystems = ref<LocalSystemOption[]>([]);
+const localSystemsError = ref<string | null>(null);
+let localSystemsRequest = 0;
+
+watch(
+  () => [serverStore.activeServerId, serverStore.activeServer?.code_list_url] as const,
+  async ([serverId]) => {
+    const request = ++localSystemsRequest;
+    localSystems.value = [];
+    localSystemsError.value = null;
+    if (!serverId || !codeListConfigured.value) return;
+    try {
+      const systems = await listCodeSystems(serverId);
+      if (request === localSystemsRequest) localSystems.value = localSystemOptions(systems);
+    } catch (e) {
+      if (request === localSystemsRequest) localSystemsError.value = String(e);
+    }
+  },
+  { immediate: true },
+);
+
+function localSystem(value: string): LocalSystemOption | null {
+  const id = value.trim();
+  return localSystems.value.find((s) => s.value === id) ?? null;
+}
+
 // SNOMED CT is the default system for every tab and the one used by every
 // "Try an example" shortcut below — named once so it isn't repeated as a
 // magic string at each call site.
@@ -123,6 +166,19 @@ const lookupLoading = ref(false);
 const lookupError = ref<string | null>(null);
 const lookupResult = ref<CodeDescription | null>(null);
 const canLookup = computed(() => !!lookupSystem.value.trim() && !!lookupCodeInput.value.trim());
+// Local code systems only: the language asked for (null = the service's
+// default) and the URL the entry came from.
+const lookupLocal = computed(() => localSystem(lookupSystem.value));
+const lookupLanguage = ref<string | null>(null);
+const lookupSourceUrl = ref<string | null>(null);
+watch(lookupLocal, () => {
+  lookupLanguage.value = null;
+});
+
+function setLookupLanguage(language: string) {
+  lookupLanguage.value = language;
+  if (lookupResult.value) void runLookup();
+}
 
 /** Fills in a known-good SNOMED CT code and runs it — a one-click way to see what this tab does. */
 function runLookupExample() {
@@ -136,15 +192,25 @@ async function runLookup(source: QuerySource = "manual") {
   lookupLoading.value = true;
   lookupError.value = null;
   lookupResult.value = null;
+  lookupSourceUrl.value = null;
   // Captured once so the event reports the system actually queried, even if
   // the field is edited while the request is in flight.
   const system = lookupSystem.value.trim();
+  const code = lookupCodeInput.value.trim();
   try {
-    lookupResult.value = await describeCode(
-      serverStore.activeServerId,
-      system,
-      lookupCodeInput.value.trim(),
-    );
+    if (lookupLocal.value) {
+      const entry = await getCodeListEntry(
+        serverStore.activeServerId,
+        system,
+        code,
+        lookupLanguage.value,
+      );
+      if (!entry) throw `Code ${code} is not in ${system}.`;
+      lookupResult.value = codeListEntryToDescription(entry, lookupLanguage.value);
+      lookupSourceUrl.value = entry.source_url;
+    } else {
+      lookupResult.value = await describeCode(serverStore.activeServerId, system, code);
+    }
     trackQuery("lookup", source, "success", system);
   } catch (e) {
     lookupError.value = String(e);
@@ -161,7 +227,39 @@ const expandCount = ref(100);
 const expandLoading = ref(false);
 const expandError = ref<string | null>(null);
 const expandResult = ref<ValueSetExpansion | null>(null);
-const canExpand = computed(() => !!expandUrl.value.trim());
+// "codelist": list every code of a local code system instead of expanding a
+// FHIR value set.
+const expandMode = ref<"valueset" | "codelist">("valueset");
+const expandCodeSystem = ref<string | null>(null);
+const expandLanguage = ref<string | null>(null);
+const codeListResult = ref<CodeList | null>(null);
+const expandLocal = computed(() =>
+  expandCodeSystem.value ? localSystem(expandCodeSystem.value) : null,
+);
+const localSystemSelectOptions = computed(() =>
+  localSystems.value.map((s) => ({ value: s.value, label: s.label })),
+);
+const filteredCodeList = computed(() =>
+  codeListResult.value ? filterCodeListItems(codeListResult.value.items, expandFilter.value) : [],
+);
+const canExpand = computed(() =>
+  expandMode.value === "codelist" ? !!expandCodeSystem.value : !!expandUrl.value.trim(),
+);
+watch(expandCodeSystem, () => {
+  expandLanguage.value = null;
+});
+
+function setExpandLanguage(language: string) {
+  expandLanguage.value = language;
+  if (codeListResult.value) void runExpand();
+}
+
+function useLocalCodeInLookup(codeSystem: string, code: string) {
+  activeTab.value = "lookup";
+  lookupSystem.value = codeSystem;
+  lookupCodeInput.value = code;
+  void runLookup("from_expansion");
+}
 
 /** Fills in one of the well-known value set presets and runs it immediately. */
 function applyExpandPreset(url: string) {
@@ -174,7 +272,17 @@ async function runExpand(source: QuerySource = "manual") {
   expandLoading.value = true;
   expandError.value = null;
   expandResult.value = null;
+  codeListResult.value = null;
   try {
+    if (expandMode.value === "codelist" && expandCodeSystem.value) {
+      codeListResult.value = await getCodeList(
+        serverStore.activeServerId,
+        expandCodeSystem.value,
+        expandLanguage.value,
+      );
+      trackQuery("expand", source, "success");
+      return;
+    }
     expandResult.value = await expandValueSet(
       serverStore.activeServerId,
       expandUrl.value.trim(),
@@ -200,6 +308,8 @@ const validateResult = ref<CodeValidation | null>(null);
 const canValidate = computed(
   () => !!validateSystem.value.trim() && !!validateCodeInput.value.trim(),
 );
+// Local code lists have no value sets — validation is "is this code in it".
+const validateLocal = computed(() => localSystem(validateSystem.value));
 
 /** Fills in a known-good SNOMED CT code and runs it — a one-click way to see what this tab does. */
 function runValidateExample() {
@@ -218,12 +328,18 @@ async function runValidate(source: QuerySource = "manual") {
   // the field is edited while the request is in flight.
   const system = validateSystem.value.trim();
   try {
-    validateResult.value = await validateCode(
-      serverStore.activeServerId,
-      system,
-      validateCodeInput.value.trim(),
-      validateValueSetUrl.value.trim() || undefined,
-    );
+    if (validateLocal.value) {
+      const code = validateCodeInput.value.trim();
+      const entry = await getCodeListEntry(serverStore.activeServerId, system, code, null);
+      validateResult.value = codeListEntryToValidation(entry, system, code);
+    } else {
+      validateResult.value = await validateCode(
+        serverStore.activeServerId,
+        system,
+        validateCodeInput.value.trim(),
+        validateValueSetUrl.value.trim() || undefined,
+      );
+    }
     trackQuery("validate", source, "success", system);
   } catch (e) {
     validateError.value = String(e);
@@ -358,7 +474,7 @@ function useConceptInLookup(concept: TerminologyConcept) {
         <div class="header-title-row">
           <h2>Terminology</h2>
           <TourReplayButton
-            v-if="serverStore.activeServerId && effectiveTerminologyUrl"
+            v-if="serverStore.activeServerId && terminologyAvailable"
             tour-id="terminology"
             view-label="Terminology Browser"
           />
@@ -384,7 +500,7 @@ function useConceptInLookup(concept: TerminologyConcept) {
       <p>Select a server to query its configured terminology server.</p>
     </div>
 
-    <div v-else-if="!effectiveTerminologyUrl" class="empty-state terminology-disabled">
+    <div v-else-if="!terminologyAvailable" class="empty-state terminology-disabled">
       <h3>No terminology server configured</h3>
       <p>
         Set a default terminology server URL in
@@ -394,6 +510,13 @@ function useConceptInLookup(concept: TerminologyConcept) {
     </div>
 
     <template v-else>
+      <p v-if="!effectiveTerminologyUrl" class="source-note">
+        No FHIR terminology server is configured, so only this server's code lists work here.
+      </p>
+      <p v-if="localSystemsError" class="error-msg">
+        Couldn't load this server's code lists: {{ localSystemsError }}
+      </p>
+
       <div class="tab-bar" role="tablist" data-tour="terminology-tabs">
         <button
           v-for="tab in TABS"
@@ -423,11 +546,32 @@ function useConceptInLookup(concept: TerminologyConcept) {
       <div v-if="activeTab === 'lookup'" class="tool-panel">
         <form class="tool-form" @submit.prevent="runLookup()">
           <div class="form-row">
-            <TerminologySystemSelect v-model="lookupSystem" label="Terminology system" />
+            <TerminologySystemSelect
+              v-model="lookupSystem"
+              label="Terminology system"
+              :local-systems="localSystems"
+            />
             <label>
               Code
               <input class="input" v-model="lookupCodeInput" placeholder="91302008" />
             </label>
+            <div
+              v-if="lookupLocal && lookupLocal.languages.length > 1"
+              class="lang-group"
+              role="group"
+              aria-label="Language"
+            >
+              <button
+                v-for="lang in lookupLocal.languages"
+                :key="lang"
+                type="button"
+                class="btn btn-sm"
+                :aria-pressed="lookupLanguage === lang"
+                @click="setLookupLanguage(lang)"
+              >
+                {{ lang }}
+              </button>
+            </div>
             <button type="submit" class="btn btn-primary" :disabled="lookupLoading || !canLookup">
               {{ lookupLoading ? "Looking up…" : "Describe" }}
             </button>
@@ -479,12 +623,75 @@ function useConceptInLookup(concept: TerminologyConcept) {
               </tbody>
             </table>
           </div>
+
+          <div v-if="lookupSourceUrl" class="result-section">
+            <h4>Source</h4>
+            <p class="source-url">Code-list service: {{ lookupSourceUrl }}</p>
+          </div>
         </div>
       </div>
 
       <!-- Expand a Value Set -->
       <div v-if="activeTab === 'expand'" class="tool-panel">
-        <form class="tool-form" @submit.prevent="runExpand()">
+        <div v-if="codeListConfigured" class="mode-toggle" role="group" aria-label="What to list">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :aria-pressed="expandMode === 'valueset'"
+            @click="expandMode = 'valueset'"
+          >
+            FHIR value set
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :aria-pressed="expandMode === 'codelist'"
+            @click="expandMode = 'codelist'"
+          >
+            Code list (all codes)
+          </button>
+        </div>
+
+        <form v-if="expandMode === 'codelist'" class="tool-form" @submit.prevent="runExpand()">
+          <div class="form-row">
+            <SearchableSelect
+              v-model="expandCodeSystem"
+              :options="localSystemSelectOptions"
+              label="Code list"
+              search-placeholder="Filter code lists..."
+            />
+            <label>
+              Filter
+              <input
+                class="input"
+                v-model="expandFilter"
+                placeholder="code, description or user code"
+              />
+            </label>
+            <div
+              v-if="expandLocal && expandLocal.languages.length > 1"
+              class="lang-group"
+              role="group"
+              aria-label="Language"
+            >
+              <button
+                v-for="lang in expandLocal.languages"
+                :key="lang"
+                type="button"
+                class="btn btn-sm"
+                :aria-pressed="expandLanguage === lang"
+                @click="setExpandLanguage(lang)"
+              >
+                {{ lang }}
+              </button>
+            </div>
+            <button type="submit" class="btn btn-primary" :disabled="expandLoading || !canExpand">
+              {{ expandLoading ? "Loading…" : "List codes" }}
+            </button>
+          </div>
+        </form>
+
+        <form v-else class="tool-form" @submit.prevent="runExpand()">
           <div class="form-row">
             <label class="grow">
               Value set URL
@@ -526,7 +733,44 @@ function useConceptInLookup(concept: TerminologyConcept) {
 
         <div v-if="expandError" class="error-msg">{{ expandError }}</div>
 
-        <div v-else-if="expandResult" class="result-card">
+        <div v-else-if="expandMode === 'codelist' && codeListResult" class="result-card">
+          <div class="result-meta">
+            <span class="badge">{{ codeListResult.code_system }}</span>
+            <span class="badge"
+              >{{ filteredCodeList.length }} shown of {{ codeListResult.items.length }}</span
+            >
+          </div>
+          <table v-if="filteredCodeList.length" class="result-table concept-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Description</th>
+                <th>User code</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in filteredCodeList" :key="item.code">
+                <td class="term-code">{{ item.code }}</td>
+                <td>{{ item.description }}</td>
+                <td class="term-code">{{ item.user_code }}</td>
+                <td>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    @click="useLocalCodeInLookup(codeListResult.code_system, item.code)"
+                  >
+                    Describe
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="empty-hint">No codes match.</p>
+          <p class="source-url">Source: code-list service, {{ codeListResult.source_url }}</p>
+        </div>
+
+        <div v-else-if="expandMode === 'valueset' && expandResult" class="result-card">
           <div class="result-meta">
             <span class="badge"
               >{{ expandResult.concepts.length }} shown{{
@@ -564,12 +808,16 @@ function useConceptInLookup(concept: TerminologyConcept) {
       <div v-if="activeTab === 'validate'" class="tool-panel">
         <form class="tool-form" @submit.prevent="runValidate()">
           <div class="form-row">
-            <TerminologySystemSelect v-model="validateSystem" label="Terminology system" />
+            <TerminologySystemSelect
+              v-model="validateSystem"
+              label="Terminology system"
+              :local-systems="localSystems"
+            />
             <label>
               Code
               <input class="input" v-model="validateCodeInput" placeholder="386661006" />
             </label>
-            <label class="grow">
+            <label v-if="!validateLocal" class="grow">
               Value set URL (optional)
               <input
                 class="input"
@@ -680,6 +928,32 @@ function useConceptInLookup(concept: TerminologyConcept) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.source-note {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.source-url {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.mode-toggle,
+.lang-group {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+}
+.mode-toggle {
+  margin-bottom: 12px;
+}
+.mode-toggle .btn[aria-pressed="true"],
+.lang-group .btn[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  color: var(--color-text);
 }
 .subtitle {
   margin-top: 4px;
