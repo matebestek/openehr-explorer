@@ -104,6 +104,25 @@ The user found that the panel showed only the recorded code. Investigation:
 - frontend: 193 vitest tests, vue-tsc, oxlint, oxfmt
 - Storybook builds, with new `CodeListService` and `RecordedCodeDetail` stories
 
+## 9. Local code systems in the Terminology page (uncommitted)
+
+The user asked for the code-list service's code systems (270 on this server) in the Terminology page's system dropdown.
+
+**Behaviour, agreed with the user:**
+- **Picker:** local systems are listed after SNOMED CT, LOINC, ICD and ATC, labelled by description and marked "Code list · <languages>".
+- **Describe:** looks up one code via `…/codesystem/{id}/entity/{code}` and shows the description, user code and language, with a language switch and the source URL.
+- **Validate:** answers "is the code in the list". The value-set field is hidden, since local lists have no value sets.
+- **Subsumes:** local systems aren't offered; the lists are flat.
+- **Expand:** has a new "Code list (all codes)" mode. It lists every code with description and user code, filters client-side, has a language switch, a Describe button per code, and shows the source URL.
+- **Without a FHIR server:** the page now works when only a code-list URL is configured, with a note that only code lists are available.
+
+**Backend:** new commands `list_code_systems` (returns empty when the profile has no code-list URL) and `get_code_list_entry`. An unknown code returns `None`; an unknown code system is an error, read from the service's 404 JSON `errorMessage` and `resourceType`.
+
+**Checks:**
+- Rust: 136 tests, clippy, fmt
+- frontend: 197 vitest tests, vue-tsc, oxlint, oxfmt
+- Storybook builds, with 2 new picker stories
+
 ## Open items
 
 - The code-list listing is confirmed working in the app; the new Source section isn't tested in the app yet.
