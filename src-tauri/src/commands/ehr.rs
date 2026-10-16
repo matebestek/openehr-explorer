@@ -76,12 +76,14 @@ fn sort_field_path(field: &str) -> Option<&'static str> {
 /// (newest first) when omitted, matching the app's historical default
 /// ordering (see PRD-0001).
 ///
-/// Always appends `e/ehr_id/value ASC` as a secondary sort key (unless
-/// `ehr_id` is itself the primary field) so ties on the primary field — e.g.
-/// several EHRs created in the same instant — get a total, stable order.
-/// Without one, a CDR is free to return tied rows in a different relative
-/// order across separate paginated queries, which could duplicate or skip
-/// rows across page boundaries.
+/// Appends `e/ehr_id/value ASC` as a secondary sort key only when sorting by
+/// `system_id`, where ties are the norm (most EHRs in a CDR share one system
+/// id) — without one, a CDR is free to return tied rows in a different
+/// relative order across separate paginated queries, which could duplicate
+/// or skip rows across page boundaries. `time_created` is effectively unique,
+/// and the extra key is not free: on a large Better Platform CDR,
+/// `ORDER BY e/time_created/value DESC` alone returned in ~300 ms while
+/// adding `, e/ehr_id/value ASC` made the same query time out.
 fn build_ehr_list_aql(
     offset: usize,
     limit: usize,
@@ -98,10 +100,10 @@ fn build_ehr_list_aql(
         other => return Err(format!("Unsupported sort direction: {}", other)),
     };
 
-    let tiebreaker = if field == "ehr_id" {
-        String::new()
+    let tiebreaker = if field == "system_id" {
+        ", e/ehr_id/value ASC"
     } else {
-        ", e/ehr_id/value ASC".to_string()
+        ""
     };
 
     Ok(format!(
@@ -135,6 +137,13 @@ fn is_order_by_unsupported(response_body: &str) -> bool {
         && (lower.contains("not implemented") || lower.contains("not supported"))
 }
 
+/// Detects a request that failed because it hit the client timeout, from the
+/// error message `send_instrumented` returns (it includes the reqwest/hyper
+/// source chain, which ends in "operation timed out" for a timeout).
+fn is_timeout_error(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("timed out")
+}
+
 /// Splits off the lookahead row from a page fetched with `limit + 1`
 /// requested (see `list_ehrs`'s `fetch_limit`): returns the page truncated
 /// back down to `limit` rows, plus whether an extra row beyond it was
@@ -155,6 +164,7 @@ pub async fn list_ehrs(
     limit: usize,
     sort_by: Option<String>,
     sort_dir: Option<String>,
+    unsorted: Option<bool>,
 ) -> Result<EhrListResponse, String> {
     let profile = get_profile_by_id(&server_id)?;
     let client = create_client(&profile);
@@ -166,16 +176,23 @@ pub async fn list_ehrs(
     // page exists (see `has_more` below) without a separate COUNT query.
     let fetch_limit = limit.saturating_add(1);
 
-    // Use AQL to list EHRs since the REST API list endpoint varies by implementation
-    let aql = build_ehr_list_aql(offset, fetch_limit, sort_by.as_deref(), sort_dir.as_deref())?;
-    let resp = send_instrumented(
+    // Use AQL to list EHRs since the REST API list endpoint varies by implementation.
+    // `unsorted` is set by the frontend once this server has already needed
+    // the unsorted fallback below, so it isn't re-attempted on every page.
+    let skip_sort = unsorted.unwrap_or(false);
+    let aql = if skip_sort {
+        build_ehr_list_aql_unsorted(offset, fetch_limit)
+    } else {
+        build_ehr_list_aql(offset, fetch_limit, sort_by.as_deref(), sort_dir.as_deref())?
+    };
+    let first = send_instrumented(
         &app,
         &client,
         make_request(&client, reqwest::Method::POST, &url, &profile.auth_method)
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "q": aql })),
     )
-    .await?;
+    .await;
 
     // Some CDRs (confirmed: EHRBase) don't implement `ORDER BY` on EHR-level
     // attributes. Rather than surfacing a hard error and leaving the EHR
@@ -183,7 +200,17 @@ pub async fn list_ehrs(
     // clause; `sort_applied: false` in the response tells the frontend the
     // requested order wasn't actually honored, so it can say so instead of
     // silently showing unsorted results as if they were sorted.
-    let (resp, sort_applied) = if !resp.is_success && is_order_by_unsupported(&resp.body) {
+    //
+    // The same fallback applies when the sorted query times out: on a large
+    // CDR (confirmed: a Better Platform instance) `ORDER BY` forces a sort over
+    // every EHR before the first page can be returned, while the unsorted
+    // query with the same `LIMIT` comes back immediately.
+    let sort_failed = !skip_sort
+        && match &first {
+            Ok(resp) => !resp.is_success && is_order_by_unsupported(&resp.body),
+            Err(message) => is_timeout_error(message),
+        };
+    let (resp, sort_applied) = if sort_failed {
         let fallback_aql = build_ehr_list_aql_unsorted(offset, fetch_limit);
         let fallback_resp = send_instrumented(
             &app,
@@ -195,7 +222,7 @@ pub async fn list_ehrs(
         .await?;
         (fallback_resp, false)
     } else {
-        (resp, true)
+        (first?, !skip_sort)
     };
 
     if !resp.is_success {
@@ -1851,15 +1878,20 @@ mod tests {
     }
 
     #[test]
-    fn test_build_ehr_list_aql_appends_ehr_id_tiebreaker_for_other_fields() {
-        // A secondary sort key on the unique ehr_id gives ties on the
-        // primary field (e.g. several EHRs created in the same instant) a
-        // stable, total order across separate paginated queries.
-        let aql = build_ehr_list_aql(0, 20, Some("time_created"), Some("desc")).unwrap();
-        assert!(aql.contains("ORDER BY e/time_created/value DESC, e/ehr_id/value ASC LIMIT"));
-
+    fn test_build_ehr_list_aql_appends_ehr_id_tiebreaker_for_system_id() {
+        // Most EHRs share a system_id, so a secondary sort key on the unique
+        // ehr_id is needed for a stable, total order across separate
+        // paginated queries.
         let aql = build_ehr_list_aql(0, 20, Some("system_id"), Some("asc")).unwrap();
         assert!(aql.contains("ORDER BY e/system_id/value ASC, e/ehr_id/value ASC LIMIT"));
+    }
+
+    #[test]
+    fn test_build_ehr_list_aql_no_tiebreaker_for_time_created() {
+        // time_created is effectively unique, and the extra sort key made
+        // this query time out on a large Better Platform CDR.
+        let aql = build_ehr_list_aql(0, 20, Some("time_created"), Some("desc")).unwrap();
+        assert!(aql.contains("ORDER BY e/time_created/value DESC LIMIT"));
     }
 
     #[test]
@@ -1877,6 +1909,16 @@ mod tests {
         assert!(!aql.to_ascii_uppercase().contains("ORDER BY"));
         assert!(aql.contains("LIMIT 20 OFFSET 40"));
         assert!(aql.contains("SELECT e/ehr_id/value, e/time_created/value, e/system_id/value"));
+    }
+
+    #[test]
+    fn test_is_timeout_error_matches_reqwest_timeout_message() {
+        assert!(is_timeout_error(
+            "Request failed: error sending request for url (https://cdr.example/ehr/rest/openehr/v1/query/aql): operation timed out"
+        ));
+        assert!(!is_timeout_error(
+            "Request failed: error sending request for url (https://cdr.example/query/aql): connection refused"
+        ));
     }
 
     #[test]

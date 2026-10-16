@@ -12,6 +12,11 @@ const HEADER_ACCEPT: &str = "Accept";
 const HEADER_CONTENT_TYPE: &str = "Content-Type";
 const MIME_JSON: &str = "application/json";
 
+// Query execution can legitimately run far longer than the client-wide 30 s
+// default (large AQL scans on production-sized CDRs), so query requests
+// override it per request.
+const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AqlResult {
     pub columns: Vec<AqlColumn>,
@@ -111,6 +116,7 @@ pub async fn execute_aql(
         make_request(&client, reqwest::Method::POST, &url, &profile.auth_method)
             .header(HEADER_CONTENT_TYPE, MIME_JSON)
             .header(HEADER_ACCEPT, MIME_JSON)
+            .timeout(QUERY_TIMEOUT)
             .json(&serde_json::json!({ "q": query })),
     )
     .await?;
@@ -350,6 +356,7 @@ pub async fn execute_stored_query(
         make_request(&client, reqwest::Method::POST, &url, &profile.auth_method)
             .header(HEADER_CONTENT_TYPE, MIME_JSON)
             .header(HEADER_ACCEPT, MIME_JSON)
+            .timeout(QUERY_TIMEOUT)
             .json(&serde_json::json!({
                 "query_parameters": parameters.unwrap_or_default(),
             })),

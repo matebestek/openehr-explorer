@@ -1394,7 +1394,7 @@ const sortFieldOptions: { value: EhrSortField; label: string }[] = [
 // All three fields hit the same EHR-level-attribute limitation, so there's
 // no field left to offer instead — disabling avoids the user repeatedly
 // triggering the same failed-request-then-fallback round trip.
-const sortUnsupportedTitle = "Sorting isn't supported by this server";
+const sortUnsupportedTitle = "Sorting isn't supported by this server, or is too slow on it";
 
 function onSortFieldChange(field: string) {
   if (!serverStore.activeServerId) return;
@@ -1721,7 +1721,7 @@ const ehrStatCards = computed<EhrStatCard[]>(() => [
         </div>
 
         <div v-if="!ehrStore.sortApplied" class="limit-banner">
-          Sorting isn't supported by this server — showing default order.
+          Sorting isn't supported by this server, or is too slow on it — showing default order.
         </div>
 
         <div class="ehr-list">

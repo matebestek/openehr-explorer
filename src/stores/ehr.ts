@@ -175,6 +175,12 @@ export const useEhrStore = defineStore("ehr", () => {
   // pattern as searchRequestId/directoryRequestId below.
   let fetchRequestId = 0;
 
+  // Servers on which list_ehrs already had to fall back to an unsorted query
+  // (ORDER BY rejected, or too slow and timed out). Later pages ask for the
+  // unsorted query directly, so paging doesn't repeat the failed sorted
+  // request (and, on a slow server, its full timeout) every time.
+  const sortUnsupportedServers = new Set<string>();
+
   async function fetchEhrs(serverId: string, page = 0) {
     const requestId = ++fetchRequestId;
     loading.value = true;
@@ -186,7 +192,9 @@ export const useEhrStore = defineStore("ehr", () => {
         limit: limit.value,
         sortBy: sortBy.value,
         sortDir: sortDir.value,
+        unsorted: sortUnsupportedServers.has(serverId),
       });
+      if (!result.sort_applied) sortUnsupportedServers.add(serverId);
       if (requestId !== fetchRequestId) return; // superseded by a newer request
       ehrs.value = result.ehrs;
       total.value = result.total;

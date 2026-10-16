@@ -135,7 +135,12 @@ pub async fn send_instrumented(
 
     let response = match client.execute(request).await {
         Ok(r) => r,
-        Err(e) => return Err(fail(&mut entry, format!("Request failed: {}", e))),
+        Err(e) => {
+            return Err(fail(
+                &mut entry,
+                format!("Request failed: {}", error_chain(&e)),
+            ))
+        }
     };
 
     let status = response.status().as_u16();
@@ -154,7 +159,7 @@ pub async fn send_instrumented(
             entry.response_headers = redact_headers(&response_headers);
             return Err(fail(
                 &mut entry,
-                format!("Failed to read response body: {}", e),
+                format!("Failed to read response body: {}", error_chain(&e)),
             ));
         }
     };
@@ -187,4 +192,18 @@ pub async fn send_instrumented(
         headers: response_headers,
         body,
     })
+}
+
+/// Formats an error together with its `source()` chain. reqwest's `Display`
+/// only shows the outermost message ("error sending request for url ..."),
+/// which hides the actual cause (timeout, connection refused, TLS failure).
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut message = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
