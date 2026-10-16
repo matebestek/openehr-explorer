@@ -136,6 +136,26 @@ pub async fn get_web_template(
     )
     .await?;
 
+    // `application/openehr.wt+json` is EHRBase's media type; Better Platform only
+    // serves the OPT from the openEHR endpoint and answers 406. It exposes the
+    // Web Template through its own API at `{base_url}/rest/v1/template/{id}`.
+    let resp = if resp.status == 406 {
+        let url = format!(
+            "{}/rest/v1/template/{}",
+            profile.base_url.trim_end_matches('/'),
+            urlencoding::encode(&template_id)
+        );
+        send_instrumented(
+            &app,
+            &client,
+            make_request(&client, reqwest::Method::GET, &url, &profile.auth_method)
+                .header("Accept", "application/json"),
+        )
+        .await?
+    } else {
+        resp
+    };
+
     if !resp.is_success {
         return Err(format!(
             "Server returned HTTP {}: {}",
@@ -143,7 +163,20 @@ pub async fn get_web_template(
         ));
     }
 
-    serde_json::from_str(&resp.body).map_err(|e| format!("Failed to parse web template: {}", e))
+    let body: Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse web template: {}", e))?;
+    Ok(unwrap_web_template(body))
+}
+
+/// Better's `/rest/v1/template/{id}` wraps the Web Template as
+/// `{ "meta": {...}, "webTemplate": {...} }`; the openEHR endpoint returns it bare.
+fn unwrap_web_template(body: Value) -> Value {
+    match body {
+        Value::Object(mut map) if map.get("webTemplate").is_some_and(Value::is_object) => {
+            map.remove("webTemplate").unwrap_or_default()
+        }
+        other => other,
+    }
 }
 
 #[tauri::command]
@@ -344,6 +377,24 @@ pub async fn get_term_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unwrap_web_template_better_envelope() {
+        let body = serde_json::json!({
+            "meta": { "href": "https://cdr.example.com/rest/v1/template/T" },
+            "webTemplate": { "templateId": "T", "tree": { "id": "t" } }
+        });
+        assert_eq!(
+            unwrap_web_template(body),
+            serde_json::json!({ "templateId": "T", "tree": { "id": "t" } })
+        );
+    }
+
+    #[test]
+    fn test_unwrap_web_template_bare_is_unchanged() {
+        let body = serde_json::json!({ "templateId": "T", "tree": { "id": "t" } });
+        assert_eq!(unwrap_web_template(body.clone()), body);
+    }
 
     #[test]
     fn test_normalise_term_code_bare_code() {
