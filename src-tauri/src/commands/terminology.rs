@@ -31,6 +31,12 @@ fn terminology_to_fhir_system(terminology: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether a terminology id is already a URI (`http://snomed.info/sct`,
+/// `urn:oid:…`) and so usable as a FHIR `system` as-is.
+fn is_uri(system: &str) -> bool {
+    system.contains("://") || system.starts_with("urn:")
+}
+
 /// A single `Parameters.parameter` entry from a FHIR terminology response.
 /// Covers the value types + nested `part` entries actually used by
 /// `$lookup`/`$validate-code`/`$subsumes` — `designation` and `property`
@@ -118,8 +124,15 @@ pub async fn lookup_code(
         None => return Ok(None), // No terminology server configured
     };
 
-    // Map terminology name to FHIR system URI
-    let fhir_system = terminology_to_fhir_system(&system).unwrap_or(&system);
+    // Map terminology name to FHIR system URI. Anything else that isn't
+    // already a URI is a template-local code list (e.g. Better's
+    // `A06_smoking`) no FHIR server can know — skip the request rather than
+    // collect a 422/404 for every coded value rendered.
+    let fhir_system = match terminology_to_fhir_system(&system) {
+        Some(uri) => uri,
+        None if is_uri(&system) => system.as_str(),
+        None => return Ok(None),
+    };
 
     // Build the $lookup URL
     let url = format!(
@@ -477,6 +490,14 @@ mod tests {
             Some("http://loinc.org")
         );
         assert_eq!(terminology_to_fhir_system("local"), None);
+    }
+
+    #[test]
+    fn recognises_uri_terminology_ids() {
+        assert!(is_uri("http://snomed.info/sct"));
+        assert!(is_uri("urn:oid:2.16.840.1.113883.6.96"));
+        assert!(!is_uri("A06_smoking"));
+        assert!(!is_uri("local"));
     }
 
     #[test]
