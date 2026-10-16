@@ -111,3 +111,23 @@ The Web Template represents an ELEMENT and its value as one node whose `aqlPath`
 - Exact visual design within the side-panel layout, panel width/resizing, and how bindings/annotations are laid out.
 - Whether the AQL-style path is computed in `buildTree` or lazily on click.
 - How to detect a value-set URL in a Web Template code input (Better and EHRBase encode it differently; support what can be verified, show the "no value set" note otherwise).
+
+## Amendment (2026-10-17): code-list services and two click targets
+
+Found on the user's Better CDR: template-local code systems such as `A06_smoking` are enumerated in **neither** the Web Template (the field has no `inputs`) **nor** the OPT (an empty `C_CODE_REFERENCE`). Better forms load them at runtime from a deployment-specific terminology adapter (form environment → external API "Zorica Terminologies"), which needs no login:
+
+- `GET {base}/codesystem/{id}` → metadata incl. `languages`
+- `GET {base}/codesystem/{id}/entities?pagesize=N&language=xx` → `{ items: [{ code, description, user_code }], lastPage }`
+
+Changes, decided with the user:
+
+- **Server profile:** optional **Code-list service URL** (`code_list_url`), e.g. `https://zzora-test.ss.ezdrav.si/terminology-adapter/rest/terminology`. Backend command `get_code_list` (src-tauri/src/commands/code_list.rs); CDR credentials are never sent to it.
+- **Lookup order** for a field without a template list: terminology ids that aren't a standard FHIR terminology, a URI, `local` or `openehr` go to the code-list service; everything else keeps the FHIR `$expand` / `$lookup` path. The list shows each code's description and user code; the language switch uses the code system's own languages and re-fetches.
+- **Two click targets** (replaces "clicking a coded value opens the list"):
+  - Clicking the **terminology badge** (e.g. `A06_SMOKING`) opens the panel with the **full value list**, recorded code highlighted.
+  - Clicking the **value** opens the panel with **only the recorded code** — label, code, user code, description, score, bindings.
+- **Source shown** (2026-10-17, user request): the panel's "Source" section names where the list, or the recorded code's description, came from:
+  - for a template list: `Template <id> (Web Template)`
+  - for the code-list service: `Code-list service, code system <id>`, plus the exact URL fetched (`get_code_list` returns it as `source_url`, without paging)
+  - for a FHIR value set expansion: the value set URL
+  - for a FHIR code lookup: `FHIR terminology server, code lookup`
