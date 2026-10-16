@@ -18,6 +18,7 @@ import {
   loadExternalState,
   pickLanguage,
   resolvePanelState,
+  shouldEscapeCloseValuePanel,
   templateLanguages,
   type CodedValueSelection,
   type PanelState,
@@ -150,9 +151,14 @@ function handleKeydown(e: KeyboardEvent) {
     nextTick(() => searchOverlayRef.value?.focus());
   }
 
-  // Escape closes the value list (PRD-0019) — unless the search overlay is
-  // open, which handles its own Escape first.
-  if (e.key === "Escape" && rightPanel.value === "values" && !showPanelSearch.value) {
+  // Escape closes the value list (PRD-0019) — unless something else (search
+  // overlay, delete dialog) already took this Escape.
+  if (
+    shouldEscapeCloseValuePanel(e, {
+      panelOpen: rightPanel.value === "values",
+      dialogOpen: showDeleteDialog.value,
+    })
+  ) {
     closeValuePanel();
   }
 }

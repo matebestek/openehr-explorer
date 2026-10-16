@@ -38,6 +38,7 @@ const smokingModel: ValueListModel = {
     { code: "3", label: "Kadilec", description: "Trenutno kadi", ordinal: null, bindings: [] },
     { code: "4", label: "Neznano", description: null, ordinal: null, bindings: [] },
   ],
+  total: null,
   fieldBindings: [],
   annotations: { comment: "Vprašanje ob vsakem obisku" },
 };
@@ -54,6 +55,7 @@ const severityModel: ValueListModel = {
     { code: "at0011", label: "Moderate", description: null, ordinal: 2, bindings: [] },
     { code: "at0012", label: "Severe", description: null, ordinal: 3, bindings: [] },
   ],
+  total: null,
   fieldBindings: [],
   annotations: {},
 };

@@ -7,6 +7,7 @@ import {
   extractValueSetUrl,
   loadExternalState,
   resolvePanelState,
+  shouldEscapeCloseValuePanel,
   findTemplateNodeByAqlPath,
   normaliseBindings,
   pickLanguage,
@@ -534,5 +535,83 @@ describe("loadExternalState", () => {
     ).toMatchObject({ kind: "external-unavailable", description: null });
     expect(deps.expandValueSet).not.toHaveBeenCalled();
     expect(deps.describeCode).not.toHaveBeenCalled();
+  });
+});
+
+describe("review fixes", () => {
+  it("resolves a choice element (DV_CODED_TEXT | DV_TEXT, same path and name) by the recorded RM type", () => {
+    const tpl = template([
+      { id: "status", name: "Status", rmType: "DV_CODED_TEXT", aqlPath: ELEMENT_PATH },
+      { id: "status", name: "Status", rmType: "DV_TEXT", aqlPath: ELEMENT_PATH },
+    ]);
+    const match = findTemplateNodeByAqlPath(tpl, ELEMENT_PATH, "Status", "DV_CODED_TEXT");
+    expect(match.status === "found" && match.node.rmType).toBe("DV_CODED_TEXT");
+  });
+
+  it("resolvePanelState uses the recorded RM type to pick the choice branch", () => {
+    const tpl = template([
+      { ...smokingNode, name: "Smoking status" },
+      { id: "overall_status", name: "Smoking status", rmType: "DV_TEXT", aqlPath: ELEMENT_PATH },
+    ]);
+    expect(resolvePanelState(tpl, smokingSelection, "en")).toMatchObject({ kind: "list" });
+  });
+
+  it("doesn't call a recorded code missing when the server list was only partly fetched", () => {
+    const fetched = Array.from({ length: 1000 }, (_, i) => opt(String(i)));
+    const v = visibleOptions(fetched, rec("99999"), 200, 5000);
+    expect(v.recordedNotInList).toBe(false);
+    expect(v.recordedNotLoaded).toBe(true);
+    expect(v.hiddenCount).toBe(4800);
+  });
+
+  it("keeps the list total from the value set expansion", async () => {
+    const deps = {
+      expandValueSet: async () => ({
+        total: 5000,
+        concepts: [{ system: "http://snomed.info/sct", code: "1", display: "One" }],
+      }),
+      describeCode: vi.fn(),
+    };
+    const s = await loadExternalState(
+      "srv",
+      { ...externalModel, valueSetUrl: "http://vs" },
+      recSnomed,
+      deps,
+    );
+    expect(s.kind === "list" && s.model.total).toBe(5000);
+  });
+});
+
+describe("shouldEscapeCloseValuePanel", () => {
+  const open = { panelOpen: true, dialogOpen: false };
+
+  it("closes on an unhandled Escape while the panel is open", () => {
+    expect(shouldEscapeCloseValuePanel({ key: "Escape", defaultPrevented: false }, open)).toBe(
+      true,
+    );
+  });
+
+  it("ignores an Escape another component already handled (e.g. the search overlay)", () => {
+    expect(shouldEscapeCloseValuePanel({ key: "Escape", defaultPrevented: true }, open)).toBe(
+      false,
+    );
+  });
+
+  it("ignores Escape while a dialog is open, other keys, and a closed panel", () => {
+    expect(
+      shouldEscapeCloseValuePanel(
+        { key: "Escape", defaultPrevented: false },
+        { panelOpen: true, dialogOpen: true },
+      ),
+    ).toBe(false);
+    expect(shouldEscapeCloseValuePanel({ key: "Enter", defaultPrevented: false }, open)).toBe(
+      false,
+    );
+    expect(
+      shouldEscapeCloseValuePanel(
+        { key: "Escape", defaultPrevented: false },
+        { panelOpen: false, dialogOpen: false },
+      ),
+    ).toBe(false);
   });
 });

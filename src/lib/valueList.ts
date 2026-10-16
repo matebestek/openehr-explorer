@@ -123,6 +123,7 @@ export function findTemplateNodeByAqlPath(
   webTemplate: Record<string, unknown>,
   aqlPath: string,
   elementName: string | null,
+  rmType: string | null = null,
 ): TemplateMatch {
   const tree = asRecord(webTemplate.tree);
   if (!tree) return { status: "not-found" };
@@ -133,7 +134,13 @@ export function findTemplateNodeByAqlPath(
   if (matches.length === 0) return { status: "not-found" };
   if (matches.length === 1) return { status: "found", node: matches[0] };
 
-  const named = elementName ? matches.filter((n) => nodeHasName(n, elementName)) : [];
+  // A choice ELEMENT (e.g. DV_CODED_TEXT | DV_TEXT) has one node per allowed
+  // type, all sharing path and name — the recorded value's type picks one.
+  const typed = rmType ? matches.filter((n) => n.rmType === rmType) : [];
+  const candidates = typed.length > 0 ? typed : matches;
+  if (candidates.length === 1) return { status: "found", node: candidates[0] };
+
+  const named = elementName ? candidates.filter((n) => nodeHasName(n, elementName)) : [];
   if (named.length === 1) return { status: "found", node: named[0] };
   return { status: "ambiguous", count: matches.length };
 }
@@ -160,6 +167,8 @@ export interface ValueListModel {
   listOpen: boolean;
   valueSetUrl: string | null;
   options: ValueListOption[];
+  /** Size of the full list when only part of it was fetched (value set expansion), else null. */
+  total: number | null;
   fieldBindings: TermBindingRef[];
   annotations: Record<string, string>;
 }
@@ -170,6 +179,8 @@ export interface VisibleOptions {
   hiddenCount: number;
   /** The recorded code isn't in the list at all (open list or data drift). */
   recordedNotInList: boolean;
+  /** The recorded code wasn't among the fetched part of a larger list. */
+  recordedNotLoaded: boolean;
 }
 
 export function templateLanguages(webTemplate: Record<string, unknown>): {
@@ -287,6 +298,7 @@ export function buildValueListModel(node: TemplateNode, language: string | null)
     listOpen: input?.listOpen === true,
     valueSetUrl: extractValueSetUrl(node),
     options,
+    total: null,
     fieldBindings: normaliseBindings(node.termBindings),
     annotations,
   };
@@ -296,16 +308,21 @@ export function visibleOptions(
   options: ValueListOption[],
   recorded: RecordedCode,
   cap = 200,
+  total: number | null = null,
 ): VisibleOptions {
   const recordedIndex = options.findIndex((o) => o.code === recorded.code);
-  const recordedNotInList = recordedIndex === -1;
-  if (options.length <= cap) return { rows: options, hiddenCount: 0, recordedNotInList };
+  const complete = total === null || total <= options.length;
+  const recordedNotInList = recordedIndex === -1 && complete;
+  const recordedNotLoaded = recordedIndex === -1 && !complete;
 
   const rows =
-    recordedIndex === -1 || recordedIndex < cap
-      ? options.slice(0, cap)
-      : [...options.slice(0, cap - 1), options[recordedIndex]];
-  return { rows, hiddenCount: options.length - rows.length, recordedNotInList };
+    options.length <= cap
+      ? options
+      : recordedIndex === -1 || recordedIndex < cap
+        ? options.slice(0, cap)
+        : [...options.slice(0, cap - 1), options[recordedIndex]];
+  const fullSize = Math.max(total ?? options.length, options.length);
+  return { rows, hiddenCount: fullSize - rows.length, recordedNotInList, recordedNotLoaded };
 }
 
 /** What the value list panel shows. Reason strings are user-facing. */
@@ -349,7 +366,12 @@ export function resolvePanelState(
       reason: "The template for this composition could not be loaded.",
     };
   }
-  const match = findTemplateNodeByAqlPath(webTemplate, selection.aqlPath, selection.elementName);
+  const match = findTemplateNodeByAqlPath(
+    webTemplate,
+    selection.aqlPath,
+    selection.elementName,
+    selection.recorded.rmType,
+  );
   if (match.status === "not-found") {
     return { kind: "unavailable", reason: "This value's field was not found in the template." };
   }
@@ -402,7 +424,11 @@ export async function loadExternalState(
           ordinal: null,
           bindings: [],
         }));
-      return { kind: "list", model: { ...model, options }, source: "terminology-server" };
+      return {
+        kind: "list",
+        model: { ...model, options, total: expansion.total },
+        source: "terminology-server",
+      };
     } catch (e) {
       reason = `The terminology server couldn't expand the value set: ${String(e)}`;
     }
@@ -415,4 +441,16 @@ export async function loadExternalState(
     description = null;
   }
   return { kind: "external-unavailable", model, reason, description };
+}
+
+/**
+ * Whether a window-level keydown should close the value list panel. The
+ * window listener sees an Escape only after components (e.g. the search
+ * overlay) have handled it, so those mark it with `preventDefault()`.
+ */
+export function shouldEscapeCloseValuePanel(
+  event: { key: string; defaultPrevented: boolean },
+  view: { panelOpen: boolean; dialogOpen: boolean },
+): boolean {
+  return event.key === "Escape" && !event.defaultPrevented && view.panelOpen && !view.dialogOpen;
 }

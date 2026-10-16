@@ -32,9 +32,25 @@ const model = computed(() =>
 
 const visible = computed(() =>
   props.state.kind === "list"
-    ? visibleOptions(props.state.model.options, props.selection.recorded)
+    ? visibleOptions(
+        props.state.model.options,
+        props.selection.recorded,
+        200,
+        props.state.model.total,
+      )
     : null,
 );
+
+// Why the recorded code sits in its own pinned row above the list.
+const pinnedNote = computed(() => {
+  if (props.state.kind !== "list" || !visible.value) return "";
+  if (visible.value.recordedNotLoaded) {
+    return `recorded — not among the first ${props.state.model.options.length} loaded`;
+  }
+  return props.state.source === "template"
+    ? "recorded — not in template list"
+    : "recorded — not in the value set";
+});
 
 const hasOrdinals = computed(() => visible.value?.rows.some((o) => o.ordinal !== null) ?? false);
 
@@ -133,11 +149,15 @@ watch(
               </tr>
             </thead>
             <tbody>
-              <tr v-if="visible.recordedNotInList" class="recorded" aria-current="true">
+              <tr
+                v-if="visible.recordedNotInList || visible.recordedNotLoaded"
+                class="recorded"
+                aria-current="true"
+              >
                 <td class="mono">{{ selection.recorded.code }}</td>
                 <td>
                   {{ selection.recorded.label ?? "—" }}
-                  <div class="option-description">recorded — not in template list</div>
+                  <div class="option-description">{{ pinnedNote }}</div>
                 </td>
                 <td v-if="hasOrdinals">{{ selection.recorded.ordinal ?? "" }}</td>
               </tr>

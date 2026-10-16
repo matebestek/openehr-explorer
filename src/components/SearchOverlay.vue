@@ -28,6 +28,9 @@ watch(
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
+    // Mark it handled so window-level Escape handlers (e.g. the composition
+    // viewer's value list panel) don't also act on it.
+    e.preventDefault();
     emit("close");
   } else if (e.key === "Enter") {
     if (e.shiftKey) {
