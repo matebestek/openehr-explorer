@@ -2,7 +2,7 @@
 
 Version: 1.0
 Date: 2026-10-17
-Status: Approved
+Status: Implemented
 Owner: openEHR Explorer
 Repo slug: openehr-explorer
 Depends on: PRD-0020 (Forms browser; same section pattern and the Better-only rule)

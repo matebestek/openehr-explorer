@@ -100,6 +100,8 @@ export type AnalyticsEvent =
   | "template_list_sorted"
   // --- forms (PRD-0020) ---
   | "forms_viewed"
+  // --- views (PRD-0021) ---
+  | "views_viewed"
   | "compose_started_from_template"
   // --- terminology ---
   | "terminology_query_run"

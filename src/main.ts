@@ -63,6 +63,17 @@ const router = createRouter({
       props: true,
     },
     {
+      path: "/views",
+      name: "views",
+      component: () => import("./views/ViewBrowser.vue"),
+    },
+    {
+      path: "/views/:name",
+      name: "view-detail",
+      component: () => import("./views/ViewBrowser.vue"),
+      props: true,
+    },
+    {
       path: "/aql",
       name: "aql",
       component: () => import("./views/AqlRunner.vue"),

@@ -40,6 +40,11 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         description:
           "A new Forms section lists a Better Platform server's forms and shows everything in a form definition: versions, fields with their code lists and visibility, the form's external APIs, its layout and the raw JSON.",
       },
+      {
+        title: "Browse Better views",
+        description:
+          "A new Views section shows the views stored on a Better Platform server: their parameters, every processing step with its AQL, FreeMarker or JavaScript code, and the raw definition. AQL steps open in the AQL Runner.",
+      },
     ],
   },
   {

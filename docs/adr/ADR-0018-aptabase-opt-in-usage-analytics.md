@@ -213,6 +213,7 @@ gated; see the **Session-counter carveout** section above.
 | `template_inspected` | yes | `view` (`tree`/`opt`/`json`/`flat`) | Feature adoption; preferred template view |
 | `template_list_sorted` | yes | `field` (`created_timestamp`/`template_id`/`concept`) | Template list sorting adoption |
 | `forms_viewed` | yes | — | Forms browser adoption (PRD-0020) |
+| `views_viewed` | yes | — | Views browser adoption (PRD-0021) |
 | `compose_started_from_template` | yes | — | Start of the template → composition funnel |
 | `terminology_query_run` | yes | `operation` (`lookup`/`expand`/`validate`/`subsumes`), `source` (`manual`/`example`/`deep_link`/`from_expansion`/`preset`), `outcome` (`success`/`error`), `system` (a known shortcut such as `snomed-ct`, else `other`; omitted for `expand`) | Terminology Browser usage, entry points, and failure rate |
 | `terminology_template_link_followed` | yes | — | Template Bound Concepts → Terminology Browser link |
