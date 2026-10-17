@@ -2,7 +2,7 @@
 
 Version: 1.0
 Date: 2026-10-17
-Status: Approved
+Status: Implemented
 Owner: openEHR Explorer
 Repo slug: openehr-explorer
 Depends on: Server profiles with `server_type: "better_platform"` and Better's native API under `{base_url}/rest/v1` (as already used by the Web Template / FLAT fallbacks)

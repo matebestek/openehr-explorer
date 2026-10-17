@@ -98,6 +98,8 @@ export type AnalyticsEvent =
   | "template_uploaded"
   | "template_opt_exported"
   | "template_list_sorted"
+  // --- forms (PRD-0020) ---
+  | "forms_viewed"
   | "compose_started_from_template"
   // --- terminology ---
   | "terminology_query_run"

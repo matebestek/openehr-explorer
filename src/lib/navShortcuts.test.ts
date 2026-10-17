@@ -23,6 +23,12 @@ describe("navShortcuts", () => {
     expect(pathForShortcutKey("a")).toBeNull();
   });
 
+  it("places Forms directly after Templates", () => {
+    const paths = navItems.map((i) => i.path);
+    expect(paths.indexOf("/forms")).toBe(paths.indexOf("/templates") + 1);
+    expect(pathForShortcutKey("4")).toBe("/forms");
+  });
+
   it("describes the range from the tab count", () => {
     expect(shortcutRangeLabel()).toBe(`1–${navItems.length}`);
   });

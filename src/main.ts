@@ -52,6 +52,17 @@ const router = createRouter({
       props: true,
     },
     {
+      path: "/forms",
+      name: "forms",
+      component: () => import("./views/FormBrowser.vue"),
+    },
+    {
+      path: "/forms/:name/:version",
+      name: "form-detail",
+      component: () => import("./views/FormBrowser.vue"),
+      props: true,
+    },
+    {
       path: "/aql",
       name: "aql",
       component: () => import("./views/AqlRunner.vue"),

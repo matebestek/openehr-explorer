@@ -12,6 +12,7 @@ export const navItems: readonly NavItem[] = [
   { path: "/dashboard", label: "Overview", icon: "O" },
   { path: "/ehrs", label: "EHR Browser", icon: "H" },
   { path: "/templates", label: "Templates", icon: "T" },
+  { path: "/forms", label: "Forms", icon: "F" },
   { path: "/aql", label: "AQL Runner", icon: "Q" },
   { path: "/terminology", label: "Terminology", icon: "V" },
   { path: "/servers", label: "Servers", icon: "S" },

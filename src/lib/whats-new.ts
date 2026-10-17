@@ -35,6 +35,11 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         description:
           "In the composition viewer, click a coded value to open a side panel listing every option the template allows, in every language it carries, with the recorded one highlighted. Fields bound to SNOMED CT or other external terminologies are expanded via your terminology server.",
       },
+      {
+        title: "Browse Better forms",
+        description:
+          "A new Forms section lists a Better Platform server's forms and shows everything in a form definition: versions, fields with their code lists and visibility, the form's external APIs, its layout and the raw JSON.",
+      },
     ],
   },
   {
