@@ -3,6 +3,7 @@ pub mod composition;
 pub mod contribution;
 pub mod dashboard;
 pub mod ehr;
+pub mod form;
 pub mod query;
 pub mod server;
 pub mod template;
