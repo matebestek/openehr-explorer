@@ -118,3 +118,222 @@ export function filterGroups(groups: FormGroup[], text: string, chip: string | n
     return chip === NO_TYPE ? g.typeLabels.length === 0 : g.typeLabels.includes(chip);
   });
 }
+
+// --- Form definition view models --------------------------------------------
+
+type Json = Record<string, unknown>;
+
+function asObject(value: unknown): Json | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Json)
+    : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** A resource's content by name; `null` when the form has none. */
+export function resource(def: FormDefinition, name: string): unknown {
+  return def.resources.find((r) => r.name === name)?.content ?? null;
+}
+
+export type FieldBadge =
+  | { kind: "hidden" }
+  | { kind: "read-only" }
+  | { kind: "required" }
+  | { kind: "label-overridden" }
+  | { kind: "code-list"; value: string }
+  | { kind: "remote"; value: string };
+
+export interface FieldNode {
+  /** `formId`, else `id`, else the node's position path. */
+  key: string;
+  label: string;
+  rmType: string | null;
+  badges: FieldBadge[];
+  children: FieldNode[];
+  /** The node's own definition, without `children`. */
+  raw: Json;
+}
+
+const OPENEHR_TERMINOLOGIES = new Set(["openehr", "local"]);
+
+function fieldBadges(node: Json): FieldBadge[] {
+  const viewConfig = asObject(node.viewConfig);
+  const advanced = asObject(viewConfig?.advanced);
+  const fieldConfigs = Object.values(asObject(viewConfig?.field) ?? {}).map(asObject);
+  const datasource = asObject(viewConfig?.datasource);
+
+  const badges: FieldBadge[] = [];
+  if (advanced?.hidden === true) badges.push({ kind: "hidden" });
+  if (fieldConfigs.some((f) => f?.readonly === true || f?.disabled === true)) {
+    badges.push({ kind: "read-only" });
+  }
+  if (typeof node.min === "number" && node.min >= 1) badges.push({ kind: "required" });
+  if (advanced?.overrideLabel === true) badges.push({ kind: "label-overridden" });
+
+  const codeLists = new Set<string>();
+  for (const input of asArray(node.inputs).map(asObject)) {
+    const terminology = str(input?.terminology);
+    if (terminology && !OPENEHR_TERMINOLOGIES.has(terminology)) codeLists.add(terminology);
+  }
+  for (const value of codeLists) badges.push({ kind: "code-list", value });
+
+  const remoteUrl = str(datasource?.loadRemoteUrl);
+  if (datasource?.loadRemote === true && remoteUrl)
+    badges.push({ kind: "remote", value: remoteUrl });
+  return badges;
+}
+
+function toFieldNode(node: Json, language: string | null, path: string): FieldNode {
+  const localizedNames = asObject(node.localizedNames);
+  const localized = language ? str(localizedNames?.[language]) : null;
+  const { children, ...raw } = node;
+  return {
+    key: str(node.formId) ?? str(node.id) ?? path,
+    label: localized ?? str(node.localizedName) ?? str(node.name) ?? str(node.id) ?? "(unnamed)",
+    rmType: str(node.rmType),
+    badges: fieldBadges(node),
+    children: asArray(children)
+      .map(asObject)
+      .filter((c): c is Json => c !== null)
+      .map((c, i) => toFieldNode(c, language, `${path}/${i}`)),
+    raw,
+  };
+}
+
+/** The form-description tree, labelled in `language` (falling back to `name`). */
+export function buildFieldTree(description: unknown, language: string | null): FieldNode | null {
+  const root = asObject(description);
+  return root ? toFieldNode(root, language, "0") : null;
+}
+
+/** Every language in the tree's `localizedNames`, sorted, with `defaultLanguage` first. */
+export function formLanguages(description: unknown): string[] {
+  const root = asObject(description);
+  if (!root) return [];
+  const languages = new Set<string>();
+  const visit = (node: Json) => {
+    for (const lang of Object.keys(asObject(node.localizedNames) ?? {})) languages.add(lang);
+    for (const child of asArray(node.children).map(asObject)) if (child) visit(child);
+  };
+  visit(root);
+  const defaultLanguage = str(root.defaultLanguage);
+  const rest = [...languages].filter((l) => l !== defaultLanguage).sort();
+  return defaultLanguage ? [defaultLanguage, ...rest] : rest;
+}
+
+export interface EnvironmentCall {
+  name: string;
+  method: string | null;
+  url: string | null;
+  bodyType: string | null;
+  pathParams: Record<string, string>;
+  parameters: { name: string; value: string }[];
+  sampleResponse: unknown;
+}
+
+export interface EnvironmentModel {
+  variables: {
+    name: string;
+    type: string | null;
+    source: string | null;
+    mandatory: boolean;
+    value: string | null;
+  }[];
+  apis: {
+    name: string;
+    authType: string | null;
+    headers: unknown[];
+    parameters: unknown[];
+    calls: EnvironmentCall[];
+  }[];
+}
+
+function nameValuePairs(value: unknown): { name: string; value: string }[] {
+  return asArray(value)
+    .map(asObject)
+    .filter((p): p is Json => p !== null)
+    .map((p) => ({ name: str(p.name) ?? "", value: p.value == null ? "" : String(p.value) }));
+}
+
+/** The form-environment: variables and external APIs with their calls. */
+export function environmentModel(env: unknown): EnvironmentModel {
+  const root = asObject(env);
+  if (!root) return { variables: [], apis: [] };
+  return {
+    variables: asArray(root.variables)
+      .map(asObject)
+      .filter((v): v is Json => v !== null)
+      .map((v) => ({
+        name: str(v.name) ?? "",
+        type: str(v.type),
+        source: str(v.source),
+        mandatory: v.mandatory === true,
+        value: v.value == null ? null : String(v.value),
+      })),
+    apis: asArray(root.externalApis)
+      .map(asObject)
+      .filter((a): a is Json => a !== null)
+      .map((a) => ({
+        name: str(a.name) ?? "",
+        authType: str(asObject(a.authentication)?.type),
+        headers: asArray(a.headers),
+        parameters: asArray(a.parameters),
+        calls: asArray(a.calls)
+          .map(asObject)
+          .filter((c): c is Json => c !== null)
+          .map((c) => ({
+            name: str(c.name) ?? "",
+            method: str(c.requestMethod),
+            url: str(c.url),
+            bodyType: str(c.bodyType),
+            pathParams: Object.fromEntries(
+              Object.entries(asObject(c.pathParams) ?? {}).map(([k, v]) => [k, String(v)]),
+            ),
+            parameters: nameValuePairs(c.parameters),
+            sampleResponse: c.sampleResponse ?? null,
+          })),
+      })),
+  };
+}
+
+export interface OutlineLine {
+  depth: number;
+  text: string;
+}
+
+function outlineItem(item: Json, depth: number, lines: OutlineLine[]) {
+  const id = str(item.id);
+  if (id) lines.push({ depth, text: id });
+  for (const row of asArray(item.rows).map(asObject)) {
+    for (const col of asArray(row?.cols).map(asObject)) {
+      if (!col) continue;
+      lines.push({ depth: depth + 1, text: `Column ${String(col.width ?? "auto")}` });
+      for (const child of asArray(col.children).map(asObject)) {
+        if (child) outlineItem(child, depth + 2, lines);
+      }
+    }
+  }
+}
+
+/** The form-layout grid as an indented outline of cells, columns and field ids. */
+export function layoutOutline(layout: unknown): OutlineLine[] {
+  const lines: OutlineLine[] = [];
+  for (const cell of asArray(layout).map(asObject)) {
+    if (!cell) continue;
+    lines.push({
+      depth: 0,
+      text: `Cell row ${String(cell.row ?? "?")}, col ${String(cell.col ?? "?")}, width ${String(cell.width ?? "?")}`,
+    });
+    for (const child of asArray(cell.children).map(asObject)) {
+      if (child) outlineItem(child, 1, lines);
+    }
+  }
+  return lines;
+}
