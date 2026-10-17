@@ -6,7 +6,10 @@
 //!   **version** (there is no versions endpoint; group by name instead)
 //! - `GET {base_url}/rest/v1/form/{name}/{version}?resources=a,b,..` →
 //!   `{ meta: { href }, form: { .., resources: [{ name, mimetype, href, content }] } }`;
-//!   `content` is only filled for resources named in `resources` (`*` is rejected)
+//!   `content` is only filled for resources named in `resources`. Naming a
+//!   resource the form doesn't have fails the whole request with 404
+//!   FORM-5721 (as does `*`), so `get_form` first fetches the form without
+//!   `resources` to learn which ones it has, then asks for exactly those.
 
 use std::collections::BTreeMap;
 
@@ -15,10 +18,6 @@ use serde_json::Value;
 
 use super::server::{create_client, get_profile_by_id, make_request, ServerType};
 use crate::inspector::send_instrumented;
-
-/// Every resource a form version can carry, requested explicitly.
-const RESOURCE_NAMES: &str =
-    "form-description,form-layout,form-environment,form-metadata,app-pages,widget-configuration,templates";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FormSummary {
@@ -43,9 +42,9 @@ pub struct FormResource {
     pub href: Option<String>,
     /// `None` for an empty resource; a JSON string for `text/plain` ones.
     pub content: Option<Value>,
-    /// Whether this resource's content was asked for. A resource outside
-    /// `RESOURCE_NAMES` arrives without content even when it has some, so the
-    /// view must not call it "empty".
+    /// Whether this resource's content was asked for. One that wasn't arrives
+    /// without content even when it has some, so the view must not call it
+    /// "empty".
     pub requested: bool,
 }
 
@@ -137,13 +136,29 @@ fn forms_list_url(base_url: &str) -> String {
     format!("{}/form", better_api_root(base_url))
 }
 
-fn form_url(base_url: &str, name: &str, version: &str) -> String {
-    format!(
-        "{}/form/{}/{}?resources={RESOURCE_NAMES}",
+fn form_url(base_url: &str, name: &str, version: &str, resources: &[String]) -> String {
+    let url = format!(
+        "{}/form/{}/{}",
         better_api_root(base_url),
         urlencoding::encode(name),
         urlencoding::encode(version)
-    )
+    );
+    if resources.is_empty() {
+        return url;
+    }
+    let names: Vec<String> = resources
+        .iter()
+        .map(|n| urlencoding::encode(n).into_owned())
+        .collect();
+    format!("{url}?resources={}", names.join(","))
+}
+
+/// The names of the resources a form version has, from a response fetched
+/// without `resources`.
+fn resource_names(body: &str) -> Result<Vec<String>, String> {
+    let parsed: RawFormResponse =
+        serde_json::from_str(body).map_err(|e| format!("Unexpected form response: {e}"))?;
+    Ok(parsed.form.resources.into_iter().map(|r| r.name).collect())
 }
 
 fn parse_forms_list(body: &str) -> Result<Vec<FormSummary>, String> {
@@ -152,7 +167,7 @@ fn parse_forms_list(body: &str) -> Result<Vec<FormSummary>, String> {
     Ok(raw.forms.into_iter().map(|f| f.summary().0).collect())
 }
 
-fn parse_form_definition(body: &str) -> Result<FormDefinition, String> {
+fn parse_form_definition(body: &str, requested: &[String]) -> Result<FormDefinition, String> {
     let value: Value =
         serde_json::from_str(body).map_err(|e| format!("Unexpected form response: {e}"))?;
     let mut raw_form = value.get("form").cloned().unwrap_or(Value::Null);
@@ -169,7 +184,7 @@ fn parse_form_definition(body: &str) -> Result<FormDefinition, String> {
         resources: resources
             .into_iter()
             .map(|r| FormResource {
-                requested: RESOURCE_NAMES.split(',').any(|n| n == r.name),
+                requested: requested.contains(&r.name),
                 name: r.name,
                 mimetype: r.mimetype,
                 href: r.href,
@@ -241,8 +256,19 @@ pub async fn get_form(
     name: String,
     version: String,
 ) -> Result<FormDefinition, String> {
-    let body = get_json(&app, &server_id, |base| form_url(base, &name, &version)).await?;
-    parse_form_definition(&body)
+    let listing = get_json(&app, &server_id, |base| {
+        form_url(base, &name, &version, &[])
+    })
+    .await?;
+    let names = resource_names(&listing)?;
+    if names.is_empty() {
+        return parse_form_definition(&listing, &[]);
+    }
+    let body = get_json(&app, &server_id, |base| {
+        form_url(base, &name, &version, &names)
+    })
+    .await?;
+    parse_form_definition(&body, &names)
 }
 
 #[cfg(test)]
@@ -258,17 +284,41 @@ mod tests {
     }
 
     #[test]
-    fn test_form_url_encodes_name_and_requests_all_resources() {
+    fn test_form_url_without_resources_has_no_query() {
         assert_eq!(
             form_url(
                 "https://cdr.example/ehr",
-                "P-Status nepregledanih vzorcev",
-                "1.0.20"
+                "Anamnesis View Cytology Report",
+                "1.0.9",
+                &[]
             ),
-            "https://cdr.example/ehr/rest/v1/form/P-Status%20nepregledanih%20vzorcev/1.0.20?resources=form-description,form-layout,form-environment,form-metadata,app-pages,widget-configuration,templates"
+            "https://cdr.example/ehr/rest/v1/form/Anamnesis%20View%20Cytology%20Report/1.0.9"
         );
-        assert!(form_url("https://cdr.example/ehr", "Anamneza čšž", "1.0.1")
-            .contains("/form/Anamneza%20%C4%8D%C5%A1%C5%BE/1.0.1?"));
+        assert!(
+            form_url("https://cdr.example/ehr", "Anamneza čšž", "1.0.1", &[])
+                .ends_with("/form/Anamneza%20%C4%8D%C5%A1%C5%BE/1.0.1")
+        );
+    }
+
+    #[test]
+    fn test_form_url_requests_only_the_given_resources() {
+        let names = vec!["form-description".to_string(), "form-layout".to_string()];
+        assert_eq!(
+            form_url("https://cdr.example/ehr", "Alerts", "1.0.3", &names),
+            "https://cdr.example/ehr/rest/v1/form/Alerts/1.0.3?resources=form-description,form-layout"
+        );
+    }
+
+    #[test]
+    fn test_resource_names_lists_what_the_form_has() {
+        // A form missing some resources: asking for those makes Better answer
+        // 404 FORM-5721 for the whole form, so only these may be requested.
+        let body = r#"{"meta":{"href":"h"},"form":{"name":"A","version":"1.0.9","resources":[
+            {"name":"form-description","content":null},{"name":"form-layout","content":null}]}}"#;
+        assert_eq!(
+            resource_names(body).unwrap(),
+            vec!["form-description".to_string(), "form-layout".to_string()]
+        );
     }
 
     #[test]
@@ -290,7 +340,12 @@ mod tests {
           "resources":[{"name":"form-metadata","mimetype":"application/json","href":"h1","content":null},
                        {"name":"templates","mimetype":"text/plain","href":"h2","content":"abc"},
                        {"name":"form-layout","mimetype":"application/json","href":"h3","content":[{"col":1}]}]}}"#;
-        let def = parse_form_definition(body).unwrap();
+        let requested = vec![
+            "form-metadata".to_string(),
+            "templates".to_string(),
+            "form-layout".to_string(),
+        ];
+        let def = parse_form_definition(body, &requested).unwrap();
         assert_eq!(
             def.href.as_deref(),
             Some("https://cdr.example/ehr/rest/v1/form/Anamnesis/1.0.157")
@@ -306,7 +361,7 @@ mod tests {
           "tags":{"_form_labels":"VIEW","count":3},"newAttribute":{"x":1},
           "resources":[{"name":"form-layout","content":[1]},
                        {"name":"form-extra","content":null}]}}"#;
-        let def = parse_form_definition(body).unwrap();
+        let def = parse_form_definition(body, &["form-layout".to_string()]).unwrap();
         // Nothing is dropped: the raw form keeps non-string tags and unknown attributes.
         assert_eq!(def.raw["tags"]["count"], serde_json::json!(3));
         assert_eq!(def.raw["newAttribute"]["x"], serde_json::json!(1));

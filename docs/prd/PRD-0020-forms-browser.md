@@ -50,7 +50,7 @@ All calls go to `{base_url}/rest/v1` with the profile's CDR credentials. With `b
 | `GET /form` | `{ forms: [ { templateId, name, version, createdTimestamp, status, category, creator, type, schemaVersion, tags } ] }`. Lists **every version as a separate entry**, so 255 entries cover far fewer distinct names, e.g. "P-Status nepregledanih vzorcev" appears 76 times. |
 | `GET /form?name=X` | the same shape, filtered by name |
 | `GET /form/{name}` | `{ meta: { href }, form: { …the same fields…, resources: [ { name, mimetype, type, href, content } ] } }` for the **latest** version. `content` is `null` unless requested. |
-| `GET /form/{name}/{version}?resources=a,b,…` | the same, for that version, with `content` filled in for the named resources. `resources=*` is rejected with 404. |
+| `GET /form/{name}/{version}?resources=a,b,…` | the same, for that version, with `content` filled in for the named resources. `resources=*` is rejected with 404. Naming a resource the form **doesn't have** also fails the whole request, with 404 `FORM-5721`; this is common, since many forms lack some of the seven resources. So `get_form` first fetches without `resources` to list what the form has, then asks for exactly those. |
 | `GET /form/{name}/versions` | 400: "Form version needs to be of the form 1.0.4". There is no versions endpoint; versions come from grouping `GET /form`. |
 
 **Resource names** seen: `app-pages`, `widget-configuration`, `form-metadata`, `form-environment`, `templates` (`text/plain`), `form-layout`, `form-description`. In the Anamnesis form, only `form-description` (about 49 KB), `form-layout` and `form-environment` had content.
