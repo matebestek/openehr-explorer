@@ -43,6 +43,10 @@ pub struct FormResource {
     pub href: Option<String>,
     /// `None` for an empty resource; a JSON string for `text/plain` ones.
     pub content: Option<Value>,
+    /// Whether this resource's content was asked for. A resource outside
+    /// `RESOURCE_NAMES` arrives without content even when it has some, so the
+    /// view must not call it "empty".
+    pub requested: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +54,9 @@ pub struct FormDefinition {
     pub summary: FormSummary,
     pub href: Option<String>,
     pub resources: Vec<FormResource>,
+    /// The form object exactly as the server sent it, minus `resources` —
+    /// so attributes and non-string tags this app doesn't model stay visible.
+    pub raw: Value,
 }
 
 #[derive(Deserialize)]
@@ -146,15 +153,23 @@ fn parse_forms_list(body: &str) -> Result<Vec<FormSummary>, String> {
 }
 
 fn parse_form_definition(body: &str) -> Result<FormDefinition, String> {
-    let raw: RawFormResponse =
+    let value: Value =
         serde_json::from_str(body).map_err(|e| format!("Unexpected form response: {e}"))?;
-    let (summary, resources) = raw.form.summary();
+    let mut raw_form = value.get("form").cloned().unwrap_or(Value::Null);
+    if let Some(obj) = raw_form.as_object_mut() {
+        obj.remove("resources");
+    }
+    let parsed: RawFormResponse =
+        serde_json::from_value(value).map_err(|e| format!("Unexpected form response: {e}"))?;
+    let (summary, resources) = parsed.form.summary();
     Ok(FormDefinition {
         summary,
-        href: raw.meta.and_then(|m| m.href),
+        href: parsed.meta.and_then(|m| m.href),
+        raw: raw_form,
         resources: resources
             .into_iter()
             .map(|r| FormResource {
+                requested: RESOURCE_NAMES.split(',').any(|n| n == r.name),
                 name: r.name,
                 mimetype: r.mimetype,
                 href: r.href,
@@ -283,6 +298,21 @@ mod tests {
         assert_eq!(def.resources.len(), 3);
         assert!(def.resources[0].content.is_none());
         assert_eq!(def.resources[1].content, Some(serde_json::json!("abc")));
+    }
+
+    #[test]
+    fn test_parse_form_definition_keeps_everything_raw_and_marks_unrequested_resources() {
+        let body = r#"{"meta":{"href":"h"},"form":{"name":"A","version":"1.0.0",
+          "tags":{"_form_labels":"VIEW","count":3},"newAttribute":{"x":1},
+          "resources":[{"name":"form-layout","content":[1]},
+                       {"name":"form-extra","content":null}]}}"#;
+        let def = parse_form_definition(body).unwrap();
+        // Nothing is dropped: the raw form keeps non-string tags and unknown attributes.
+        assert_eq!(def.raw["tags"]["count"], serde_json::json!(3));
+        assert_eq!(def.raw["newAttribute"]["x"], serde_json::json!(1));
+        assert!(def.raw.get("resources").is_none());
+        assert!(def.resources[0].requested);
+        assert!(!def.resources[1].requested);
     }
 
     #[test]

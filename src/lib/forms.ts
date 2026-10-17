@@ -25,14 +25,18 @@ export interface FormResource {
   name: string;
   mimetype: string | null;
   href: string | null;
-  /** `null` for an empty resource. */
+  /** `null` for an empty resource — or one whose content wasn't requested. */
   content: unknown;
+  /** False for a resource the backend didn't ask for, so `null` content means "not fetched". */
+  requested: boolean;
 }
 
 export interface FormDefinition {
   summary: FormSummary;
   href: string | null;
   resources: FormResource[];
+  /** The form object as the server sent it, minus resources — nothing the app doesn't model is lost. */
+  raw: unknown;
 }
 
 /** Every form entry (one per version) on the server. */
@@ -336,4 +340,22 @@ export function layoutOutline(layout: unknown): OutlineLine[] {
     }
   }
   return lines;
+}
+
+/** Whether a resource has content, is genuinely empty, or simply wasn't fetched. */
+export function resourceStatus(res: FormResource): "content" | "empty" | "not-fetched" {
+  if (res.content !== null && res.content !== undefined) return "content";
+  return res.requested ? "empty" : "not-fetched";
+}
+
+/**
+ * Whether an open form must be left when the active server changes: a form
+ * route from the previous server would otherwise be requested from the new
+ * one. `previous` is `undefined` on the first (initial) run.
+ */
+export function returnToListOnServerChange(
+  previous: string | null | undefined,
+  current: string | null,
+): boolean {
+  return previous !== undefined && previous !== current;
 }

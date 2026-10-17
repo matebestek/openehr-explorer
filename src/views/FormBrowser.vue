@@ -22,6 +22,8 @@ import {
   formLanguages,
   layoutOutline,
   resource,
+  resourceStatus,
+  returnToListOnServerChange,
   typeChips,
   type FieldNode,
   type FormGroup,
@@ -69,10 +71,16 @@ function loadList() {
 
 watch(
   () => [serverStore.activeServerId, isBetter.value] as const,
-  () => {
+  ([serverId], previous) => {
     formStore.clear();
     activeChip.value = null;
     loadList();
+    // A form open from the previous server doesn't exist on this one.
+    if (props.name && returnToListOnServerChange(previous?.[0], serverId)) {
+      void router.replace({ name: "forms" });
+      return;
+    }
+    openSelectedForm();
   },
   { immediate: true },
 );
@@ -87,15 +95,14 @@ function openGroup(group: FormGroup) {
 // --- Selected form ---------------------------------------------------------
 const selectedGroup = computed(() => formStore.groups.find((g) => g.name === props.name) ?? null);
 
-watch(
-  () => [serverStore.activeServerId, props.name, props.version, isBetter.value] as const,
-  ([serverId, name, version, better]) => {
-    if (!serverId || !name || !version || !better) return;
-    void formStore.fetchForm(serverId, name, version);
-    void analytics.track("forms_viewed");
-  },
-  { immediate: true },
-);
+function openSelectedForm() {
+  const serverId = serverStore.activeServerId;
+  if (!serverId || !props.name || !props.version || !isBetter.value) return;
+  void formStore.fetchForm(serverId, props.name, props.version);
+  void analytics.track("forms_viewed");
+}
+
+watch(() => [props.name, props.version] as const, openSelectedForm);
 
 function selectVersion(event: Event) {
   const version = (event.target as HTMLSelectElement).value;
@@ -349,13 +356,31 @@ function asText(content: unknown): string {
             title="Raw JSON"
             :summary="`${form?.resources.length ?? 0} resources`"
           >
+            <CollapsibleSection title="Form attributes" summary="as sent by the server">
+              <div class="json-box">
+                <JsonViewer :value="form?.raw ?? null" :default-collapsed-depth="2" />
+              </div>
+            </CollapsibleSection>
             <CollapsibleSection
               v-for="res in form?.resources ?? []"
               :key="res.name"
               :title="res.name"
-              :summary="res.content === null ? 'empty' : (res.mimetype ?? '')"
+              :summary="
+                resourceStatus(res) === 'content'
+                  ? (res.mimetype ?? '')
+                  : resourceStatus(res) === 'empty'
+                    ? 'empty'
+                    : 'not fetched'
+              "
             >
-              <p v-if="res.content === null" class="empty-hint">This resource is empty.</p>
+              <p v-if="resourceStatus(res) === 'empty'" class="empty-hint">
+                This resource is empty.
+              </p>
+              <p v-else-if="resourceStatus(res) === 'not-fetched'" class="empty-hint">
+                This resource's content wasn't requested. Its address is
+                <span class="mono">{{ res.href ?? "unknown" }}</span
+                >.
+              </p>
               <template v-else>
                 <CopyButton :text="asText(res.content)" :title="`Copy ${res.name}`" />
                 <pre v-if="typeof res.content === 'string'" class="raw-text">{{ res.content }}</pre>
@@ -557,6 +582,9 @@ function asText(content: unknown): string {
 .json-box {
   height: 420px;
   margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .json-box.small {
   height: 280px;

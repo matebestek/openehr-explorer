@@ -8,6 +8,8 @@ import {
   groupForms,
   layoutOutline,
   resource,
+  resourceStatus,
+  returnToListOnServerChange,
   typeChips,
   type FormDefinition,
   type FormSummary,
@@ -256,12 +258,43 @@ describe("resource", () => {
       summary: e("A", "1.0.0"),
       href: null,
       resources: [
-        { name: "form-layout", mimetype: "application/json", href: null, content: [1] },
-        { name: "form-metadata", mimetype: "application/json", href: null, content: null },
+        {
+          name: "form-layout",
+          mimetype: "application/json",
+          href: null,
+          content: [1],
+          requested: true,
+        },
+        {
+          name: "form-metadata",
+          mimetype: "application/json",
+          href: null,
+          content: null,
+          requested: true,
+        },
       ],
+      raw: {},
     };
     expect(resource(def, "form-layout")).toEqual([1]);
     expect(resource(def, "form-metadata")).toBeNull();
     expect(resource(def, "app-pages")).toBeNull();
+  });
+});
+
+describe("resourceStatus", () => {
+  it("tells empty resources from ones whose content wasn't requested", () => {
+    const base = { name: "x", mimetype: null, href: null };
+    expect(resourceStatus({ ...base, content: { a: 1 }, requested: true })).toBe("content");
+    expect(resourceStatus({ ...base, content: null, requested: true })).toBe("empty");
+    expect(resourceStatus({ ...base, content: null, requested: false })).toBe("not-fetched");
+  });
+});
+
+describe("returnToListOnServerChange", () => {
+  it("leaves an open form only when the server actually changes after the first load", () => {
+    expect(returnToListOnServerChange(undefined, "a")).toBe(false);
+    expect(returnToListOnServerChange("a", "a")).toBe(false);
+    expect(returnToListOnServerChange("a", "b")).toBe(true);
+    expect(returnToListOnServerChange("a", null)).toBe(true);
   });
 });
