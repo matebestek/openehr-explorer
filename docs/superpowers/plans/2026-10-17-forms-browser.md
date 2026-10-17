@@ -72,7 +72,7 @@
     assert!(form_url("https://cdr.example/ehr", "Anamneza čšž", "1.0.1").contains("/form/Anamneza%20%C4%8D%C5%A1%C5%BE/1.0.1?"));
 }
 #[test] fn test_parse_forms_list_maps_fields_and_string_tags() {
-    let body = r#"{"forms":[{"templateId":"Anamnesis","name":"Anamnesis","version":"1.0.157","createdTimestamp":"2022-04-21T13:24:44.415Z","status":"active","category":"default","creator":"admin","type":"JSON","schemaVersion":"2.3","tags":{"_form_labels":"REQUEST","_username":"janez.erzen@better.care","n":1}}]}"#;
+    let body = r#"{"forms":[{"templateId":"Anamnesis","name":"Anamnesis","version":"1.0.157","createdTimestamp":"2022-04-21T13:24:44.415Z","status":"active","category":"default","creator":"admin","type":"JSON","schemaVersion":"2.3","tags":{"_form_labels":"REQUEST","_username":"editor@example.com","n":1}}]}"#;
     let forms = parse_forms_list(body).unwrap();
     assert_eq!(forms[0].template_id.as_deref(), Some("Anamnesis"));
     assert_eq!(forms[0].form_type.as_deref(), Some("JSON"));

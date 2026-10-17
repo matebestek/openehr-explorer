@@ -121,7 +121,7 @@ Found on the user's Better CDR: template-local code systems such as `A06_smoking
 
 Changes, decided with the user:
 
-- **Server profile:** optional **Code-list service URL** (`code_list_url`), e.g. `https://zzora-test.ss.ezdrav.si/terminology-adapter/rest/terminology`. Backend command `get_code_list` (src-tauri/src/commands/code_list.rs); CDR credentials are never sent to it.
+- **Server profile:** optional **Code-list service URL** (`code_list_url`), e.g. `https://cdr.example.com/terminology-adapter/rest/terminology`. Backend command `get_code_list` (src-tauri/src/commands/code_list.rs); CDR credentials are never sent to it.
 - **Lookup order** for a field without a template list: terminology ids that aren't a standard FHIR terminology, a URI, `local` or `openehr` go to the code-list service; everything else keeps the FHIR `$expand` / `$lookup` path. The list shows each code's description and user code; the language switch uses the code system's own languages and re-fetches.
 - **Two click targets** (replaces "clicking a coded value opens the list"):
   - Clicking the **terminology badge** (e.g. `A06_SMOKING`) opens the panel with the **full value list**, recorded code highlighted.

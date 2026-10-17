@@ -43,7 +43,7 @@ Better forms carry information that exists nowhere else: which code list a field
 
 ## Better Form API (verified on the user's CDR, 2026-10-17)
 
-All calls go to `{base_url}/rest/v1` with the profile's CDR credentials. With `base_url = https://zzora-test.ss.ezdrav.si/ehr`, the base is `/ehr/rest/v1`.
+All calls go to `{base_url}/rest/v1` with the profile's CDR credentials. With `base_url = https://cdr.example.com/ehr`, the base is `/ehr/rest/v1`.
 
 | Request | Response |
 |---|---|

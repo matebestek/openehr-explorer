@@ -1,6 +1,6 @@
 # Session log: Better CDR fixes and the value list panel (2026-10-16/17)
 
-A working session that tested openEHR Explorer against a Better Platform CDR (`zzora-test.ss.ezdrav.si`, a VPN-only test system at the Oncology Institute Ljubljana). It records each problem in the order it came up, what caused it, what was changed, and what is still open.
+A working session that tested openEHR Explorer against a Better Platform CDR (a VPN-only test system, referred to here as `cdr.example.com`). It records each problem in the order it came up, what caused it, what was changed, and what is still open.
 
 Branch: `feat/template-fetch-fix` (not pushed).
 
@@ -16,9 +16,9 @@ The build is unsigned (`signingIdentity: null`). A local build has no download q
 
 ## 2. Server profile for this CDR
 
-- **Base URL:** `https://zzora-test.ss.ezdrav.si/ehr`. Leave **API path prefix** empty, so it defaults to `/rest/openehr/v1`.
+- **Base URL:** `https://cdr.example.com/ehr`. Leave **API path prefix** empty, so it defaults to `/rest/openehr/v1`.
 - `/ehr` must be part of the Base URL. Better's own API lives at `/ehr/rest/v1/…`, and `/rest/v1/…` at the host root is a web page that answers 200 HTML. The Better-specific fallbacks below only work with this setup.
-- **Code-list service URL** (new, see §8): `https://zzora-test.ss.ezdrav.si/terminology-adapter/rest/terminology`
+- **Code-list service URL** (new, see §8): `https://cdr.example.com/terminology-adapter/rest/terminology`
 
 ## 3. Templates answered 406 (commit `ddf5731`)
 
@@ -143,7 +143,7 @@ The user pushes between steps; after the last commit, the branch was 2 commits a
 
 - **Not yet tried in the app:** the code-list listing in the value panel is confirmed working, but the Source section and the Terminology page changes (§9) haven't been tried yet.
 - **FLAT fallback:** confirm it against the real server.
-- **Public repo:** PRD-0019's amendment and this log contain the internal hostname `zzora-test.ss.ezdrav.si`, and the repo is public. The earlier commits look already pushed. Decide whether to replace it with a placeholder in a follow-up commit.
+- **Public repo:** the internal hostname, institution name and a real editor email were replaced with `cdr.example.com` / `editor@example.com` before pushing `main`; earlier commits on `feat/template-fetch-fix` that were already pushed still contain the hostname in their history.
 - **PR:** open a PR for `feat/template-fetch-fix`.
 - **Deferred minors from §7.**
 - **Local `test:a11y`:** never ran, because the Playwright browser download hung; CI covers it.
