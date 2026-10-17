@@ -53,6 +53,11 @@ pub struct ViewDefinition {
     pub raw: Value,
 }
 
+/// Upper bound on admin-console pages fetched for the view list. The page
+/// count is read from the page itself, so it must not drive an unbounded
+/// number of requests (the user's server has 2 pages of ~20 views).
+const MAX_PAGES: u32 = 50;
+
 fn console_views_url(base_url: &str) -> String {
     format!("{}/adminconsole/views", base_url.trim_end_matches('/'))
 }
@@ -149,7 +154,7 @@ fn parse_views_page(html: &str) -> (Vec<ViewSummary>, u32) {
             max_page = max_page.max(n);
         }
     }
-    (views, max_page)
+    (views, max_page.min(MAX_PAGES))
 }
 
 fn opt_str(v: &Value, key: &str) -> Option<String> {
@@ -244,7 +249,16 @@ pub async fn list_views(
     let (mut views, max_page) = parse_views_page(&first);
     for page in 2..=max_page {
         let html = get_console(&app, &server_id, |base| views_page_url(base, page)).await?;
-        views.extend(parse_views_page(&html).0);
+        let new: Vec<ViewSummary> = parse_views_page(&html)
+            .0
+            .into_iter()
+            .filter(|v| !views.iter().any(|seen| seen.name == v.name))
+            .collect();
+        // A page with nothing new means the listing has ended (or repeats).
+        if new.is_empty() {
+            break;
+        }
+        views.extend(new);
     }
     views.sort_by_key(|v| v.name.to_lowercase());
     views.dedup_by(|a, b| a.name == b.name);
@@ -332,6 +346,14 @@ mod tests {
             views[1].steps,
             vec!["jsonFtlAql".to_string(), "js".to_string()]
         );
+    }
+
+    #[test]
+    fn test_parse_views_page_caps_the_page_count() {
+        // A page number from the page's own content must not make the app
+        // send an unbounded number of requests.
+        let html = r#"<a href="/ehr/adminconsole/views?criteria=&page=999999">x</a>"#;
+        assert_eq!(parse_views_page(html).1, MAX_PAGES);
     }
 
     #[test]
