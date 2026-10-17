@@ -157,6 +157,20 @@ fn parse_views_page(html: &str) -> (Vec<ViewSummary>, u32) {
     (views, max_page.min(MAX_PAGES))
 }
 
+/// A page with no views must at least be a views table. Otherwise it's most
+/// likely the console's login page served with HTTP 200 (e.g. after a
+/// redirect), which must surface as an error rather than "no views".
+fn check_views_page(html: &str, views: &[ViewSummary]) -> Result<(), String> {
+    if !views.is_empty() || html.contains("<table") {
+        return Ok(());
+    }
+    Err(
+        "The admin console returned a page without a views table — most likely its login page. \
+         Check the server profile's credentials."
+            .to_string(),
+    )
+}
+
 fn opt_str(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(String::from)
 }
@@ -247,6 +261,7 @@ pub async fn list_views(
 ) -> Result<Vec<ViewSummary>, String> {
     let first = get_console(&app, &server_id, |base| views_page_url(base, 1)).await?;
     let (mut views, max_page) = parse_views_page(&first);
+    check_views_page(&first, &views)?;
     for page in 2..=max_page {
         let html = get_console(&app, &server_id, |base| views_page_url(base, page)).await?;
         let new: Vec<ViewSummary> = parse_views_page(&html)
@@ -354,6 +369,17 @@ mod tests {
         // send an unbounded number of requests.
         let html = r#"<a href="/ehr/adminconsole/views?criteria=&page=999999">x</a>"#;
         assert_eq!(parse_views_page(html).1, MAX_PAGES);
+    }
+
+    #[test]
+    fn test_check_views_page_rejects_a_login_page() {
+        let login = r#"<html><form action="j_security_check"><input type="password" name="j_password"></form></html>"#;
+        let (views, _) = parse_views_page(login);
+        assert!(check_views_page(login, &views).is_err());
+        // An empty but real views table is fine: the server just has no views.
+        let empty = "<table class=\"table\"><tbody></tbody></table>";
+        assert!(check_views_page(empty, &parse_views_page(empty).0).is_ok());
+        assert!(check_views_page(PAGE, &parse_views_page(PAGE).0).is_ok());
     }
 
     #[test]
