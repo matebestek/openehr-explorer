@@ -8,3 +8,4 @@ pub mod query;
 pub mod server;
 pub mod template;
 pub mod terminology;
+pub mod view;

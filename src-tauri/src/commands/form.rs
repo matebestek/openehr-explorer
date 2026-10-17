@@ -203,11 +203,12 @@ fn server_type_name(server_type: &ServerType) -> &'static str {
     }
 }
 
-fn ensure_better(server_type: &ServerType) -> Result<(), String> {
+/// Rejects non-Better profiles for a Better-only feature (`"Forms"`, `"Views"`).
+pub(crate) fn ensure_better(feature: &str, server_type: &ServerType) -> Result<(), String> {
     match server_type {
         ServerType::BetterPlatform => Ok(()),
         other => Err(format!(
-            "Forms are a Better Platform feature; this server profile's type is {}.",
+            "{feature} are a Better Platform feature; this server profile's type is {}.",
             server_type_name(other)
         )),
     }
@@ -219,7 +220,7 @@ async fn get_json(
     url_for: impl Fn(&str) -> String,
 ) -> Result<String, String> {
     let profile = get_profile_by_id(server_id)?;
-    ensure_better(&profile.server_type)?;
+    ensure_better("Forms", &profile.server_type)?;
     let url = url_for(&profile.base_url);
     let client = create_client(&profile);
     let resp = send_instrumented(
@@ -377,9 +378,9 @@ mod tests {
 
     #[test]
     fn test_ensure_better_rejects_other_server_types() {
-        assert!(ensure_better(&ServerType::BetterPlatform).is_ok());
+        assert!(ensure_better("Forms", &ServerType::BetterPlatform).is_ok());
         assert_eq!(
-            ensure_better(&ServerType::Ehrbase).unwrap_err(),
+            ensure_better("Forms", &ServerType::Ehrbase).unwrap_err(),
             "Forms are a Better Platform feature; this server profile's type is EHRbase."
         );
     }

@@ -6,7 +6,7 @@ pub mod settings;
 
 use commands::{
     code_list, composition, contribution, dashboard, ehr, form, query, server, template,
-    terminology,
+    terminology, view,
 };
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::HELP_SUBMENU_ID;
@@ -246,6 +246,8 @@ pub fn run() {
             settings::get_settings,
             settings::save_settings,
             // Terminology
+            view::list_views,
+            view::get_view,
             form::list_forms,
             form::get_form,
             code_list::get_code_list,
